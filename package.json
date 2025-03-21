@@ -1,6 +1,6 @@
 {
   "name": "onlinesales-vs-plugin",
-  "displayName": "onlinesales-vs-plugin",
+  "displayName": "OnlineSales CMS",
   "description": "Edit and publish contents of your website with the full power of VSCode and Copilot.",
   "version": "0.0.1",
   "engines": {
@@ -9,13 +9,31 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "onlinesales-vs-plugin.helloWorld",
-        "title": "Hello World"
+        "command": "onlinesales-vs-plugin.initializeWorkspace",
+        "title": "OnlineSales: Initialize Workspace"
+      },
+      {
+        "command": "onlinesales-vs-plugin.authenticate",
+        "title": "OnlineSales: Authenticate"
+      },
+      {
+        "command": "onlinesales-vs-plugin.pullContent",
+        "title": "OnlineSales: Pull Content"
+      },
+      {
+        "command": "onlinesales-vs-plugin.newContent",
+        "title": "OnlineSales: New Content"
+      },
+      {
+        "command": "onlinesales-vs-plugin.pushContent",
+        "title": "OnlineSales: Push Content"
       }
     ]
   },
@@ -34,6 +52,7 @@
     "@types/vscode": "^1.98.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/fs-extra": "^11.0.4",
     "@typescript-eslint/eslint-plugin": "^8.25.0",
     "@typescript-eslint/parser": "^8.25.0",
     "eslint": "^9.21.0",
@@ -43,5 +62,10 @@
     "webpack-cli": "^6.0.1",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "fs-extra": "^11.2.0",
+    "yaml": "^2.4.0"
   }
 }

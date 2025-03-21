@@ -1,0 +1,91 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import { OnlineSalesConfig, TokenConfig } from '../models/config';
+
+export class ConfigService {
+    private workspaceRoot: string | undefined;
+    private configPath: string | undefined;
+    private tokenPath: string | undefined;
+    
+    constructor() {
+        this.initialize();
+    }
+
+    private initialize(): void {
+        // Check if there's an open workspace without throwing an error
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            this.workspaceRoot = workspaceFolders[0].uri.fsPath;
+            this.configPath = path.join(this.workspaceRoot, '.onlinesales', 'config.json');
+            this.tokenPath = path.join(this.workspaceRoot, '.onlinesales', 'token.json');
+        }
+        // If no workspace is open, paths will remain undefined
+    }
+    
+    public hasWorkspace(): boolean {
+        return !!this.workspaceRoot;
+    }
+
+    public ensureWorkspaceExists(): void {
+        if (!this.workspaceRoot) {
+            throw new Error('This command requires an open workspace. Please open a folder first.');
+        }
+    }
+    
+    public async ensureDirectoriesExist(): Promise<void> {
+        this.ensureWorkspaceExists();
+        
+        await fs.ensureDir(path.join(this.workspaceRoot!, '.onlinesales'));
+        await fs.ensureDir(path.join(this.workspaceRoot!, 'content'));
+        await fs.ensureDir(path.join(this.workspaceRoot!, 'media'));
+    }
+
+    public async getConfig(): Promise<OnlineSalesConfig | undefined> {
+        if (!this.configPath) {
+            return undefined;
+        }
+        
+        try {
+            if (await fs.pathExists(this.configPath)) {
+                const configData = await fs.readFile(this.configPath, 'utf8');
+                return JSON.parse(configData) as OnlineSalesConfig;
+            }
+        } catch (error) {
+            console.error('Failed to read config file:', error);
+        }
+        
+        return undefined;
+    }
+
+    public async saveConfig(config: OnlineSalesConfig): Promise<void> {
+        this.ensureWorkspaceExists();
+        
+        await this.ensureDirectoriesExist();
+        await fs.writeFile(this.configPath!, JSON.stringify(config, null, 2), 'utf8');
+    }
+
+    public async getToken(): Promise<TokenConfig | undefined> {
+        if (!this.tokenPath) {
+            return undefined;
+        }
+        
+        try {
+            if (await fs.pathExists(this.tokenPath)) {
+                const tokenData = await fs.readFile(this.tokenPath, 'utf8');
+                return JSON.parse(tokenData) as TokenConfig;
+            }
+        } catch (error) {
+            console.error('Failed to read token file:', error);
+        }
+        
+        return undefined;
+    }
+
+    public async saveToken(token: TokenConfig): Promise<void> {
+        this.ensureWorkspaceExists();
+        
+        await this.ensureDirectoriesExist();
+        await fs.writeFile(this.tokenPath!, JSON.stringify(token, null, 2), 'utf8');
+    }
+}

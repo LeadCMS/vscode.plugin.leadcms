@@ -1,16 +1,48 @@
-# onlinesales-vs-plugin README
+# OnlineSales CMS VSCode Extension
 
-This is the README for your extension "onlinesales-vs-plugin". After writing up a brief description, we recommend including the following sections.
+This extension allows developers and content creators to seamlessly work with OnlineSales CMS content directly within VSCode, leveraging Git version control and tools like Copilot for content creation.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- **Pull content** from OnlineSales CMS into your local workspace
+- **Edit content** in convenient `.mdx` format with full VS Code features
+- **Create new content** with easy scaffolding 
+- **Push content back** to OnlineSales CMS via its REST API
+- **Manage media assets** used in your content
 
-For example if there is an image subfolder under your extension project workspace:
+## Getting Started
 
-\!\[feature X\]\(images/feature-x.png\)
+### Prerequisites
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- Visual Studio Code 1.98.0 or higher
+- An active OnlineSales CMS account with API access
+- Access token for API authentication
+
+### Setup
+
+1. Install the extension from the VS Code marketplace
+2. Open a folder where you want to work with your content
+3. Run the command `OnlineSales: Initialize Workspace` to set up the folder structure
+4. Run `OnlineSales: Authenticate` to connect to your OnlineSales instance
+
+### Basic Workflow
+
+1. **Pull content**: Run `OnlineSales: Pull Content` to download your existing content
+2. **Edit locally**: Content is stored as `.mdx` files for the body and `.json` files for metadata
+3. **Create new content**: Use `OnlineSales: New Content` to scaffold new posts or pages
+4. **Push changes**: Run `OnlineSales: Push Content` to upload your changes back to OnlineSales CMS
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| **OnlineSales: Initialize Workspace** | Sets up the workspace folder structure and configuration |
+| **OnlineSales: Authenticate** | Authenticates with the OnlineSales API |
+| **OnlineSales: Pull Content** | Downloads content from the CMS to local files |
+| **OnlineSales: New Content** | Creates a new content scaffold locally |
+| **OnlineSales: Push Content** | Uploads local content changes back to the CMS |
+
+## Folder Structure
 
 ## Requirements
 
