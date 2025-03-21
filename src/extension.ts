@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs-extra';
 import { ConfigService } from './services/config-service';
 import { ApiService } from './services/api-service';
 import { ContentService } from './services/content-service';
@@ -7,6 +9,8 @@ import { GitService } from './services/git-service';
 import { OnlineSalesConfig, TokenConfig } from './models/config';
 import { Logger } from './utils/logger';
 import { AuthenticationError } from './utils/errors';
+import { IndexService } from './services/index-service';
+import { FileWatcherService } from './services/file-watcher-service';
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize the logger
@@ -22,8 +26,17 @@ export function activate(context: vscode.ExtensionContext) {
         
         const apiService = new ApiService(configService);
         const mediaService = new MediaService(apiService);
-        const contentService = new ContentService(apiService, mediaService);
+        const indexService = new IndexService(configService);
+        const contentService = new ContentService(apiService, mediaService, indexService);
         const gitService = new GitService(configService);
+
+        // Initialize file watcher if workspace exists
+        let fileWatcherService: FileWatcherService | undefined;
+        if (configService.hasWorkspace()) {
+            fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
+            // Add to disposables
+            context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
+        }
 
         Logger.info('Services initialized, registering commands...');
 
@@ -100,6 +113,13 @@ export function activate(context: vscode.ExtensionContext) {
                         progress.report({ message: 'Continuing without Git...', increment: 40 });
                     }
                 });
+
+                // Initialize file watcher for the newly set up workspace
+                if (!fileWatcherService) {
+                    fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
+                    // Add to disposables
+                    context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
+                }
 
                 vscode.window.showInformationMessage('OnlineSales workspace initialized successfully.');
             } catch (error: any) {
@@ -282,6 +302,86 @@ export function activate(context: vscode.ExtensionContext) {
             }
         });
 
+        // Add a new command to show pending changes
+        const showChangesCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showChanges', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                await contentService.showChanges();
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Failed to show changes: ${error.message}`);
+            }
+        });
+
+        // Add debug commands
+        
+        // Command: Debug Index
+        const debugIndexCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.debugIndex', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                await indexService.listIndexedFiles();
+                vscode.window.showInformationMessage('Index contents logged. Check the logs for details.');
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Failed to list indexed files: ${error.message}`);
+            }
+        });
+        
+        // Command: Mark File as Renamed
+        const markRenamedCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.markRenamed', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                const oldPath = await vscode.window.showInputBox({
+                    prompt: 'Enter original file path (relative to workspace)',
+                    placeHolder: 'media/image.jpg',
+                    validateInput: input => {
+                        return input && input.trim().length > 0 ? null : 'Path is required';
+                    }
+                });
+                
+                if (!oldPath) {
+                    return;
+                }
+                
+                const newPath = await vscode.window.showInputBox({
+                    prompt: 'Enter new file path (relative to workspace)',
+                    placeHolder: 'media/renamed-image.jpg',
+                    validateInput: input => {
+                        return input && input.trim().length > 0 ? null : 'Path is required';
+                    }
+                });
+                
+                if (!newPath) {
+                    return;
+                }
+                
+                // Convert to absolute paths
+                const oldAbsPath = path.join(configService.getWorkspacePath(), oldPath.trim());
+                const newAbsPath = path.join(configService.getWorkspacePath(), newPath.trim());
+                
+                // Check if new file exists
+                if (!(await fs.pathExists(newAbsPath))) {
+                    vscode.window.showErrorMessage(`New file does not exist: ${newPath}`);
+                    return;
+                }
+                
+                await indexService.markFileRenamed(oldAbsPath, newAbsPath);
+                vscode.window.showInformationMessage(`File marked as renamed: ${oldPath} -> ${newPath}`);
+                
+                // Refresh changes view
+                await contentService.showChanges();
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Failed to mark file as renamed: ${error.message}`);
+            }
+        });
+
         // Register all commands
         Logger.info('Pushing commands to subscriptions...');
         context.subscriptions.push(showLogsCommand);
@@ -290,6 +390,9 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(pullContentCommand);
         context.subscriptions.push(newContentCommand);
         context.subscriptions.push(pushContentCommand);
+        context.subscriptions.push(showChangesCommand); // Add this line
+        context.subscriptions.push(debugIndexCommand);
+        context.subscriptions.push(markRenamedCommand);
 
         // Only show the ready notification if we have a workspace
         if (configService.hasWorkspace()) {

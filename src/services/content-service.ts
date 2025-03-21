@@ -8,17 +8,20 @@ import { MediaService } from './media-service';
 import { replaceMediaReferences } from '../utils/mdx-utils';
 import { Logger } from '../utils/logger';
 import { AuthenticationError } from '../utils/errors';
+import { IndexService } from './index-service';
 
 export class ContentService {
     private workspacePath: string | undefined;
     private apiService: ApiService;
     private configService: ConfigService;
     private mediaService: MediaService;
+    private indexService: IndexService;
     
-    constructor(apiService: ApiService, mediaService: MediaService) {
+    constructor(apiService: ApiService, mediaService: MediaService, indexService: IndexService) {
         this.apiService = apiService;
         this.configService = apiService.getConfigService();
         this.mediaService = mediaService;
+        this.indexService = indexService;
         this.initialize();
     }
 
@@ -57,6 +60,9 @@ export class ContentService {
             let errorCount = 0;
             let mediaCount = 0;
             
+            // Get IDs of all remote content for later comparison
+            const remoteIds = contents.map(content => content.id);
+            
             for (const content of contents) {
                 try {
                     if (!this.isValidContent(content)) {
@@ -72,6 +78,15 @@ export class ContentService {
                             mediaMap = await this.mediaService.downloadMediaFromMdx(content.body);
                             mediaCount += mediaMap.size;
                             
+                            // Track media files in the index
+                            for (const [remoteUrl, localPath] of mediaMap.entries()) {
+                                // Extract media ID from URL if possible
+                                const urlParts = remoteUrl.split('/');
+                                const mediaId = urlParts[urlParts.length - 1] || remoteUrl;
+                                
+                                await this.indexService.addMediaEntry(mediaId, remoteUrl, localPath);
+                            }
+                            
                             // If configured, replace remote media references with local ones
                             const config = await this.configService.getConfig();
                             if (config?.useLocalMediaReferences && mediaMap.size > 0) {
@@ -84,7 +99,10 @@ export class ContentService {
                     }
                     
                     // Then save the content to files (with possibly modified body)
-                    await this.saveContentToFiles(content);
+                    const { mdxPath, metadataPath } = await this.saveContentToFiles(content);
+                    
+                    // Add to index
+                    await this.indexService.addOrUpdateContentEntry(content, mdxPath, metadataPath);
                     
                     successCount++;
                 } catch (error) {
@@ -92,6 +110,12 @@ export class ContentService {
                     errorCount++;
                 }
             }
+            
+            // Mark entries that are in the index but not in the remote content as deleted
+            await this.indexService.markDeletedEntries(remoteIds);
+            
+            // Update index after full sync
+            await this.indexService.updateAfterFullSync();
             
             let message = successCount > 0 
                 ? `Successfully pulled ${successCount} content items with ${mediaCount} media files.` 
@@ -122,7 +146,7 @@ export class ContentService {
                typeof content.type === 'string';
     }
 
-    private async saveContentToFiles(content: ContentDetailsDto): Promise<void> {
+    private async saveContentToFiles(content: ContentDetailsDto): Promise<{ mdxPath: string, metadataPath: string }> {
         this.ensureWorkspaceExists();
 
         try {
@@ -145,6 +169,8 @@ export class ContentService {
             const { body, ...metadataWithoutBody } = content;
             
             await fs.writeFile(metadataPath, JSON.stringify(metadataWithoutBody, null, 2), 'utf8');
+            
+            return { mdxPath, metadataPath };
         } catch (error) {
             console.error(`Failed to save content ${content.id}:`, error);
             throw error;
@@ -190,10 +216,14 @@ export class ContentService {
         }
     }
 
+    // Update pushContent to integrate with the IndexService
     public async pushContent(): Promise<void> {
         this.ensureWorkspaceExists();
         
         try {
+            // Before pushing, check for local changes
+            await this.indexService.checkLocalChanges();
+            
             const contentDir = path.join(this.workspacePath!, 'content');
             const contentTypes = await fs.readdir(contentDir);
             let updatedCount = 0;
@@ -241,7 +271,16 @@ export class ContentService {
                             publishedAt: metadata.publishedAt
                         };
                         
-                        await this.apiService.updateContent(metadata.id, updateDto);
+                        const updatedContent = await this.apiService.updateContent(metadata.id, updateDto);
+                        
+                        // Update the index with the new state
+                        await this.indexService.updateAfterPush(
+                            updatedContent.id,
+                            mdxFile,
+                            jsonFilePath,
+                            updatedContent.updatedAt
+                        );
+                        
                         updatedCount++;
                     } else {
                         // Create new content
@@ -268,6 +307,15 @@ export class ContentService {
                         metadata.updatedAt = newContent.updatedAt;
                         
                         await fs.writeFile(jsonFilePath, JSON.stringify(metadata, null, 2), 'utf8');
+                        
+                        // Update the index with the new content
+                        await this.indexService.updateAfterPush(
+                            newContent.id,
+                            mdxFile,
+                            jsonFilePath,
+                            newContent.updatedAt
+                        );
+                        
                         createdCount++;
                     }
                 }
@@ -282,6 +330,74 @@ export class ContentService {
             
             Logger.error('Failed to push content:', error);
             throw error;
+        }
+    }
+
+    // Add a new method to show changes
+    public async showChanges(): Promise<void> {
+        this.ensureWorkspaceExists();
+        
+        try {
+            // Refresh local changes first
+            await this.indexService.checkLocalChanges();
+            
+            // Get the list of changes
+            const changes = await this.indexService.getPendingChanges();
+            
+            // Format changes for display
+            let changeMessage = '';
+            
+            if (changes.new.length > 0) {
+                changeMessage += `New files (${changes.new.length}):\n`;
+                changes.new.forEach(file => {
+                    changeMessage += `  - ${file}\n`;
+                });
+                changeMessage += '\n';
+            }
+            
+            if (changes.modified.length > 0) {
+                changeMessage += `Modified files (${changes.modified.length}):\n`;
+                changes.modified.forEach(file => {
+                    changeMessage += `  - ${file}\n`;
+                });
+                changeMessage += '\n';
+            }
+            
+            if (changes.deleted.length > 0) {
+                changeMessage += `Deleted files (${changes.deleted.length}):\n`;
+                changes.deleted.forEach(file => {
+                    changeMessage += `  - ${file}\n`;
+                });
+                changeMessage += '\n';
+            }
+            
+            if (changes.renamed.length > 0) {
+                changeMessage += `Renamed files (${changes.renamed.length}):\n`;
+                changes.renamed.forEach(rename => {
+                    changeMessage += `  - ${rename.from} → ${rename.to}\n`;
+                });
+                changeMessage += '\n';
+            }
+            
+            if (changes.conflict.length > 0) {
+                changeMessage += `Files with conflicts (${changes.conflict.length}):\n`;
+                changes.conflict.forEach(file => {
+                    changeMessage += `  - ${file}\n`;
+                });
+            }
+            
+            if (changeMessage === '') {
+                changeMessage = 'No changes detected. Workspace is in sync with the CMS.';
+            }
+            
+            // Show the changes in an output channel
+            const outputChannel = vscode.window.createOutputChannel('OnlineSales Changes');
+            outputChannel.clear();
+            outputChannel.appendLine(changeMessage);
+            outputChannel.show();
+        } catch (error) {
+            Logger.error('Failed to show changes:', error);
+            vscode.window.showErrorMessage(`Failed to show changes: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 }

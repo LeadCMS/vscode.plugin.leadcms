@@ -165,4 +165,14 @@ export class ConfigService {
     public dispose(): void {
         this.disposeWatchers();
     }
+
+    /**
+     * Get the current workspace path
+     */
+    public getWorkspacePath(): string {
+        if (!this.workspaceRoot) {
+            throw new Error('No workspace folder found. Please open a folder first.');
+        }
+        return this.workspaceRoot;
+    }
 }
