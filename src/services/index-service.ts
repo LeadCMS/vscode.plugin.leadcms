@@ -6,6 +6,7 @@ import { ContentIndex, IndexEntry, FileStatus, FileType, ChangeReport } from '..
 import { ContentDetailsDto } from '../models/content';
 import { ConfigService } from './config-service';
 import { Logger } from '../utils/logger';
+import { ContentReferenceUtils } from '../utils/content-reference-utils';
 
 /**
  * Service for managing the content index, which tracks the state of content
@@ -107,10 +108,16 @@ export class IndexService {
             // Ensure directory exists
             await fs.ensureDir(path.dirname(this.indexFilePath!));
             
-            // Save index file
+            // Create a sorted version of the index to maintain consistent order in the saved file
+            const sortedIndex = {
+                ...this.index,
+                entries: this.getSortedEntries(this.index.entries)
+            };
+            
+            // Save index file with sorted entries
             await fs.writeFile(
-                this.indexFilePath!, 
-                JSON.stringify(this.index, null, 2), 
+                this.indexFilePath!,
+                JSON.stringify(sortedIndex, null, 2),
                 'utf8'
             );
             
@@ -119,6 +126,26 @@ export class IndexService {
             Logger.error('Failed to save content index:', error);
             throw new Error('Failed to save content index');
         }
+    }
+
+    /**
+     * Get index entries in a consistent, sorted order
+     * This ensures the index file doesn't change order unnecessarily when only doing operations
+     * like file rename, addition, or removal
+     */
+    private getSortedEntries(entries: Record<string, IndexEntry>): Record<string, IndexEntry> {
+        // Create a sorted object with the same entries
+        const sortedEntries: Record<string, IndexEntry> = {};
+        
+        // Sort keys alphabetically for consistent order
+        const sortedKeys = Object.keys(entries).sort();
+        
+        // Add entries in sorted order
+        for (const key of sortedKeys) {
+            sortedEntries[key] = entries[key];
+        }
+        
+        return sortedEntries;
     }
 
     /**
@@ -164,27 +191,37 @@ export class IndexService {
             const contentRelPath = this.toRelativePath(mdxPath);
             const metadataRelPath = this.toRelativePath(metadataPath);
             
+            // Check existing content MDX entry
+            const existingMdxEntry = this.index!.entries[contentRelPath];
+            
             // Add content MDX entry
             this.index!.entries[contentRelPath] = {
                 id: content.id,
                 fileType: FileType.CONTENT,
                 contentType: content.type,
-                localPath: contentRelPath, // Store relative path instead of absolute
+                localPath: contentRelPath,
                 hash: mdxHash,
-                lastSyncedAt: now,
+                lastSyncedAt: existingMdxEntry && existingMdxEntry.hash === mdxHash 
+                    ? existingMdxEntry.lastSyncedAt || now  // Keep existing timestamp if hash unchanged
+                    : now,                                   // Update timestamp if hash changed or new entry
                 lastModifiedRemote: content.updatedAt,
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [metadataRelPath]
             };
+            
+            // Check existing metadata JSON entry
+            const existingMetaEntry = this.index!.entries[metadataRelPath];
             
             // Add metadata JSON entry
             this.index!.entries[metadataRelPath] = {
                 id: content.id,
                 fileType: FileType.METADATA,
                 contentType: content.type,
-                localPath: metadataRelPath, // Store relative path instead of absolute
+                localPath: metadataRelPath,
                 hash: metadataHash,
-                lastSyncedAt: now,
+                lastSyncedAt: existingMetaEntry && existingMetaEntry.hash === metadataHash
+                    ? existingMetaEntry.lastSyncedAt || now  // Keep existing timestamp if hash unchanged
+                    : now,                                    // Update timestamp if hash changed or new entry
                 lastModifiedRemote: content.updatedAt,
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [contentRelPath]
@@ -216,15 +253,25 @@ export class IndexService {
             const mediaHash = await this.calculateFileHash(localPath);
             
             const now = new Date().toISOString();
-            const relPath = this.toRelativePath(localPath);
+            
+            // Convert to relative path if an absolute path was provided
+            let relPath = localPath;
+            if (path.isAbsolute(localPath)) {
+                relPath = this.toRelativePath(localPath);
+            }
+            
+            // Check if media already exists with same hash
+            const existingEntry = this.index!.entries[relPath];
             
             // Add media entry
             this.index!.entries[relPath] = {
                 id: mediaId || remoteUrl, // Use URL as ID if no proper ID available
                 fileType: FileType.MEDIA,
-                localPath: relPath, // Store relative path instead of absolute
+                localPath: relPath,
                 hash: mediaHash,
-                lastSyncedAt: now,
+                lastSyncedAt: existingEntry && existingEntry.hash === mediaHash
+                    ? existingEntry.lastSyncedAt || now  // Keep existing timestamp if hash unchanged
+                    : now,                               // Update timestamp if hash changed or new entry
                 status: FileStatus.SYNCED
             };
             
@@ -340,140 +387,120 @@ export class IndexService {
         }
         
         Logger.info(`Completed first pass: ${changes.deleted.length} deleted, ${changes.modified.length} modified`);
-        Logger.info(`Checking for renamed files, ${deletedFilesByHash.size} potential candidates`);
         
-        // Special logging for debugging rename detection
-        if (deletedFilesByHash.size > 0) {
-            Logger.info('Potentially renamed files (by hash):');
-            for (const [hash, { path: oldPath }] of deletedFilesByHash.entries()) {
-                Logger.info(`  ${oldPath} (hash: ${hash.substring(0, 8)}...)`);
-            }
+        // Check for new files (instead of trying to detect renames by hash)
+        try {
+            // Check content directory for new files (which now includes media files)
+            await this.scanForNewFiles('content', changes, mediaExtensions);
+            
+            Logger.info(`Directory scan complete. Found ${changes.new.length} new files`);
+        } catch (error) {
+            Logger.error(`Error scanning for new files:`, error);
         }
-        
-        // Look for new files and potential renames
-        const scanDirectory = async (dir: string, contentType?: string): Promise<void> => {
-            if (!(await fs.pathExists(dir))) {
-                Logger.info(`Directory does not exist, skipping scan: ${dir}`);
-                return;
-            }
-            
-            const items = await fs.readdir(dir);
-            
-            for (const item of items) {
-                const fullPath = path.join(dir, item);
-                
-                try {
-                    const stats = await fs.stat(fullPath);
-                    
-                    if (stats.isDirectory()) {
-                        // If this is under content dir, track the content type
-                        const isContentSubdir = dir === path.join(this.workspacePath!, 'content');
-                        await scanDirectory(fullPath, isContentSubdir ? item : contentType);
-                    } else {
-                        const relPath = this.toRelativePath(fullPath);
-                        
-                        // Skip if already in index and not marked as deleted
-                        if (this.index!.entries[relPath] && 
-                            this.index!.entries[relPath].status !== FileStatus.DELETED) {
-                            continue;
-                        }
-                        
-                        // Determine file type based on extension and path
-                        let fileType: FileType | undefined;
-                        if (item.endsWith('.mdx')) {
-                            fileType = FileType.CONTENT;
-                        } else if (item.endsWith('.json') && contentType) {
-                            fileType = FileType.METADATA;
-                        } else {
-                            const ext = path.extname(item).toLowerCase();
-                            if (dir.includes('media') || mediaExtensions.includes(ext)) {
-                                fileType = FileType.MEDIA;
-                                Logger.info(`Found media file: ${relPath} (extension: ${ext})`);
-                            }
-                        }
-                        
-                        // If not a tracked file type, skip
-                        if (!fileType) {
-                            continue;
-                        }
-                        
-                        // Calculate hash
-                        let hash;
-                        try {
-                            hash = await this.calculateFileHash(fullPath);
-                            Logger.info(`Calculated hash for new file ${relPath}: ${hash.substring(0, 8)}...`);
-                        } catch (error) {
-                            Logger.error(`Failed to calculate hash for ${fullPath}:`, error);
-                            continue;
-                        }
-                        
-                        // Check if this matches a deleted file's hash (potential rename)
-                        const deletedMatch = deletedFilesByHash.get(hash);
-                        
-                        if (deletedMatch) {
-                            const { path: oldPath, entry: oldEntry } = deletedMatch;
-                            
-                            // This is a renamed file!
-                            Logger.info(`MATCH FOUND! Renamed file detected: ${oldPath} -> ${relPath}`);
-                            Logger.info(`  File type: ${fileType}, Content type: ${contentType || 'none'}`);
-                            Logger.info(`  Hash: ${hash.substring(0, 8)}...`);
-                            
-                            // Remove from deleted list
-                            changes.deleted = changes.deleted.filter(p => p !== oldPath);
-                            
-                            // Create a new entry for the renamed file
-                            this.index!.entries[relPath] = {
-                                ...oldEntry,
-                                localPath: relPath,
-                                originalPath: oldPath,
-                                status: FileStatus.RENAMED,
-                                lastModifiedLocal: new Date().toISOString()
-                            };
-                            
-                            // Delete the old entry
-                            delete this.index!.entries[oldPath];
-                            
-                            // Record the rename
-                            changes.renamed.push({ from: oldPath, to: relPath });
-                            
-                            // Remove from the map to prevent further matches
-                            deletedFilesByHash.delete(hash);
-                            continue;
-                        } else {
-                            Logger.info(`No rename match found for ${relPath}`);
-                        }
-                        
-                        // This is a new file
-                        this.index!.entries[relPath] = {
-                            id: `new-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-                            fileType,
-                            contentType,
-                            localPath: relPath,
-                            hash,
-                            lastSyncedAt: new Date().toISOString(),
-                            status: FileStatus.NEW
-                        };
-                        
-                        changes.new.push(relPath);
-                        Logger.info(`New file added to index: ${relPath}`);
-                    }
-                } catch (error) {
-                    Logger.error(`Error processing file ${fullPath}:`, error);
-                }
-            }
-        };
-        
-        // Recursively scan content and media directories
-        Logger.info('Starting directory scan for new and renamed files');
-        await scanDirectory(path.join(this.workspacePath!, 'content'));
-        await scanDirectory(path.join(this.workspacePath!, 'media'));
-        
-        Logger.info(`Directory scan complete. Found ${changes.new.length} new files and ${changes.renamed.length} renamed files`);
         
         // Save updated index
         await this.saveIndex();
         
         return changes;
+    }
+
+    /**
+     * Scan a directory for new files not in the index
+     */
+    private async scanForNewFiles(
+        dirName: string, 
+        changes: ChangeReport,
+        mediaExtensions: string[]
+    ): Promise<void> {
+        const dirPath = path.join(this.workspacePath!, dirName);
+        if (!(await fs.pathExists(dirPath))) {
+            return;
+        }
+        
+        // Use glob to find all files recursively
+        const files = await this.getAllFiles(dirPath);
+        
+        // Check if any files are not in the index
+        for (const filePath of files) {
+            const relPath = this.toRelativePath(filePath);
+            
+            // Skip if already in index
+            if (this.index!.entries[relPath]) {
+                continue;
+            }
+            
+            // This is a new file
+            const fileExt = path.extname(filePath).toLowerCase();
+            let fileType: FileType;
+            
+            if (fileExt === '.mdx') {
+                fileType = FileType.CONTENT;
+            } else if (fileExt === '.json' && relPath.includes('/content/')) {
+                fileType = FileType.METADATA;
+            } else if (mediaExtensions.includes(fileExt) && relPath.includes('/content/')) {
+                // Media files are now within content folders
+                fileType = FileType.MEDIA;
+            } else {
+                // Skip files we don't track
+                continue;
+            }
+            
+            // Calculate hash
+            let hash;
+            try {
+                hash = await this.calculateFileHash(filePath);
+            } catch (error) {
+                Logger.error(`Failed to calculate hash for new file ${filePath}:`, error);
+                continue;
+            }
+            
+            const now = new Date().toISOString();
+            
+            // Add to index as a new file - with all required properties
+            this.index!.entries[relPath] = {
+                id: `local:${relPath}`, // Temporary ID for local files
+                fileType,
+                localPath: relPath,
+                hash,
+                status: FileStatus.NEW,
+                lastModifiedLocal: now
+            };
+            
+            changes.new.push(relPath);
+            Logger.info(`Found new file: ${relPath}`);
+        }
+    }
+
+    /**
+     * Get all files in a directory recursively
+     */
+    private async getAllFiles(dirPath: string): Promise<string[]> {
+        try {
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+            
+            const files: string[] = [];
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry.name);
+                
+                if (entry.isDirectory()) {
+                    // Skip .git, node_modules, etc.
+                    if (['.git', 'node_modules', '.onlinesales'].includes(entry.name)) {
+                        continue;
+                    }
+                    
+                    // Recursively get files in subdirectories
+                    const subFiles = await this.getAllFiles(fullPath);
+                    files.push(...subFiles);
+                } else {
+                    files.push(fullPath);
+                }
+            }
+            
+            return files;
+        } catch (error) {
+            Logger.error(`Error getting files in ${dirPath}:`, error);
+            return [];
+        }
     }
 
     /**
@@ -503,9 +530,12 @@ export class IndexService {
         // Update MDX entry
         const mdxEntry = this.index!.entries[mdxRelPath];
         if (mdxEntry) {
+            const hashChanged = mdxEntry.hash !== mdxHash;
             mdxEntry.id = contentId;
             mdxEntry.hash = mdxHash;
-            mdxEntry.lastSyncedAt = now;
+            if (hashChanged) {
+                mdxEntry.lastSyncedAt = now; // Only update if hash changed
+            }
             mdxEntry.lastModifiedRemote = updatedAt;
             mdxEntry.status = FileStatus.SYNCED;
         } else {
@@ -513,9 +543,9 @@ export class IndexService {
             this.index!.entries[mdxRelPath] = {
                 id: contentId,
                 fileType: FileType.CONTENT,
-                localPath: mdxRelPath, // Store relative path instead of absolute
+                localPath: mdxRelPath,
                 hash: mdxHash,
-                lastSyncedAt: now,
+                lastSyncedAt: now, // New entry, set initial sync time
                 lastModifiedRemote: updatedAt,
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [metaRelPath]
@@ -525,9 +555,12 @@ export class IndexService {
         // Update metadata entry
         const metaEntry = this.index!.entries[metaRelPath];
         if (metaEntry) {
+            const hashChanged = metaEntry.hash !== metaHash;
             metaEntry.id = contentId;
             metaEntry.hash = metaHash;
-            metaEntry.lastSyncedAt = now;
+            if (hashChanged) {
+                metaEntry.lastSyncedAt = now; // Only update if hash changed
+            }
             metaEntry.lastModifiedRemote = updatedAt;
             metaEntry.status = FileStatus.SYNCED;
         } else {
@@ -535,9 +568,9 @@ export class IndexService {
             this.index!.entries[metaRelPath] = {
                 id: contentId,
                 fileType: FileType.METADATA,
-                localPath: metaRelPath, // Store relative path instead of absolute
+                localPath: metaRelPath,
                 hash: metaHash,
-                lastSyncedAt: now,
+                lastSyncedAt: now, // New entry, set initial sync time
                 lastModifiedRemote: updatedAt,
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [mdxRelPath]
@@ -601,8 +634,28 @@ export class IndexService {
             await this.loadIndex();
         }
         
-        this.index!.lastFullSyncAt = new Date().toISOString();
-        await this.saveIndex();
+        // Check if any entry has been synced since the last full sync
+        let hasUpdatedEntries = false;
+        const lastFullSync = new Date(this.index!.lastFullSyncAt || 0);
+        
+        for (const entry of Object.values(this.index!.entries)) {
+            if (entry.lastSyncedAt) {
+                const lastEntrySync = new Date(entry.lastSyncedAt);
+                if (lastEntrySync > lastFullSync) {
+                    hasUpdatedEntries = true;
+                    break;
+                }
+            }
+        }
+        
+        // Only update lastFullSyncAt if at least one entry was updated
+        if (hasUpdatedEntries) {
+            Logger.info('Updating lastFullSyncAt because entries were updated');
+            this.index!.lastFullSyncAt = new Date().toISOString();
+            await this.saveIndex();
+        } else {
+            Logger.info('Skipping lastFullSyncAt update as no entries were updated');
+        }
     }
 
     /**
@@ -741,5 +794,64 @@ export class IndexService {
         }
         
         Logger.info('========================');
+    }
+
+    /**
+     * Get content type and slug from path
+     * Handle both old and new structure for compatibility during migration
+     */
+    private extractContentInfoFromPath(filePath: string): { contentType?: string, slug?: string } {
+        const relativePath = this.toRelativePath(filePath);
+        const pathParts = relativePath.split(path.sep);
+        
+        // New structure: content/{contentType}/{slug}/index.{ext}
+        if (pathParts.length >= 4 && 
+            pathParts[0] === 'content' && 
+            pathParts[pathParts.length - 1].startsWith('index.')) {
+            
+            return {
+                contentType: pathParts[1],
+                slug: pathParts[2]
+            };
+        }
+        
+        // Old structure: content/{contentType}/{slug}.{ext}
+        if (pathParts.length >= 3 && 
+            pathParts[0] === 'content') {
+            
+            const filename = pathParts[pathParts.length - 1];
+            const slug = filename.substring(0, filename.lastIndexOf('.'));
+            
+            return {
+                contentType: pathParts[1],
+                slug: slug
+            };
+        }
+        
+        // Media file in content folder: content/{contentType}/{slug}/{filename}
+        if (pathParts.length >= 4 && 
+            pathParts[0] === 'content' && 
+            !pathParts[pathParts.length - 1].startsWith('index.')) {
+            
+            return {
+                contentType: pathParts[1],
+                slug: pathParts[2]
+            };
+        }
+        
+        return {};
+    }
+
+    /**
+     * Get the path of the related file for a content file
+     * For index.mdx returns path to index.json and vice versa
+     */
+    private getRelatedFilePath(filePath: string): string | null {
+        if (filePath.endsWith('index.mdx')) {
+            return filePath.replace('index.mdx', 'index.json');
+        } else if (filePath.endsWith('index.json')) {
+            return filePath.replace('index.json', 'index.mdx');
+        }
+        return null;
     }
 }

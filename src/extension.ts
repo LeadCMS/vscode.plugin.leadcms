@@ -390,7 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(pullContentCommand);
         context.subscriptions.push(newContentCommand);
         context.subscriptions.push(pushContentCommand);
-        context.subscriptions.push(showChangesCommand); // Add this line
+        context.subscriptions.push(showChangesCommand); 
         context.subscriptions.push(debugIndexCommand);
         context.subscriptions.push(markRenamedCommand);
 

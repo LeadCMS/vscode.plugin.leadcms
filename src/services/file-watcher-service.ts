@@ -10,7 +10,6 @@ import { ContentReferenceUtils } from '../utils/content-reference-utils';
  */
 export class FileWatcherService {
     private contentWatcher: vscode.FileSystemWatcher | undefined;
-    private mediaWatcher: vscode.FileSystemWatcher | undefined;
     private fileOperationsInProgress: Set<string> = new Set();
     
     constructor(private indexService: IndexService, private workspacePath: string) {
@@ -22,17 +21,12 @@ export class FileWatcherService {
      */
     private initialize(): void {
         try {
-            // Create watchers for content and media directories
+            // Create watchers for content directories (which now include media files)
             const contentGlob = new vscode.RelativePattern(this.workspacePath, '**/content/**');
-            const mediaGlob = new vscode.RelativePattern(this.workspacePath, '**/media/**');
             
             // Set up content file watcher
             this.contentWatcher = vscode.workspace.createFileSystemWatcher(contentGlob);
             this.setupContentWatcher(this.contentWatcher);
-            
-            // Set up media file watcher
-            this.mediaWatcher = vscode.workspace.createFileSystemWatcher(mediaGlob);
-            this.setupMediaWatcher(this.mediaWatcher);
             
             Logger.info('File watcher service initialized');
         } catch (error) {
@@ -41,7 +35,7 @@ export class FileWatcherService {
     }
     
     /**
-     * Set up the watcher for content files
+     * Set up the watcher for content files (now includes media files)
      */
     private setupContentWatcher(watcher: vscode.FileSystemWatcher): void {
         // Watch for file renames - VS Code provides direct rename events
@@ -52,7 +46,7 @@ export class FileWatcherService {
                     const newPath = newUri.fsPath;
                     
                     // Skip files that aren't in content directory
-                    if (!this.isContentFile(oldPath)) {
+                    if (!oldPath.includes('/content/')) {
                         continue;
                     }
                     
@@ -72,10 +66,14 @@ export class FileWatcherService {
                         }
                         
                         // Handle linked file (MDX->JSON or JSON->MDX)
-                        await this.handleLinkedFileRename(oldPath, newPath);
+                        if (this.isContentFile(oldPath)) {
+                            await this.handleLinkedFileRename(oldPath, newPath);
+                        }
                         
-                        // Handle media folder renaming regardless of index status
-                        await this.handleContentMediaFolderRename(oldPath, newPath);
+                        // Handle media file rename
+                        if (this.isMediaFile(oldPath)) {
+                            await this.handleMediaFileRename(oldPath, newPath);
+                        }
                         
                         // Check for content type folder renames
                         if (this.isContentTypeFolderRenamed(oldPath, newPath)) {
@@ -153,41 +151,6 @@ export class FileWatcherService {
     }
     
     /**
-     * Set up the watcher for media files
-     */
-    private setupMediaWatcher(watcher: vscode.FileSystemWatcher): void {
-        // Handle media folder renames
-        vscode.workspace.onDidRenameFiles(async (event) => {
-            for (const { oldUri, newUri } of event.files) {
-                try {
-                    const oldPath = oldUri.fsPath;
-                    const newPath = newUri.fsPath;
-                    
-                    // Check if it's a media folder
-                    if (this.isMediaFolder(oldPath) && this.isMediaFolder(newPath)) {
-                        Logger.info(`Media folder renamed: ${oldPath} -> ${newPath}`);
-                        
-                        // Extract slugs from media paths
-                        const oldSlug = this.extractSlugFromMediaPath(oldPath);
-                        const newSlug = this.extractSlugFromMediaPath(newPath);
-                        
-                        if (oldSlug && newSlug) {
-                            Logger.info(`Detected media folder slug change: ${oldSlug} -> ${newSlug}`);
-                            
-                            // Find and update corresponding content files
-                            await this.findAndRenameContentFilesForMediaFolder(oldSlug, newSlug);
-                        } else {
-                            Logger.warn(`Could not extract slugs from media paths: ${oldPath} -> ${newPath}`);
-                        }
-                    }
-                } catch (error) {
-                    Logger.error(`Error handling media rename: ${oldUri.fsPath} -> ${newUri.fsPath}`, error);
-                }
-            }
-        });
-    }
-    
-    /**
      * Handle renaming a linked content file
      */
     private async handleLinkedFileRename(oldPath: string, newPath: string): Promise<void> {
@@ -224,255 +187,6 @@ export class FileWatcherService {
     }
     
     /**
-     * Handles renaming the media folder associated with a renamed content file
-     */
-    private async handleContentMediaFolderRename(oldContentPath: string, newContentPath: string): Promise<void> {
-        try {
-            // Extract content info from paths
-            const oldInfo = this.extractContentFileInfo(oldContentPath);
-            const newInfo = this.extractContentFileInfo(newContentPath);
-            
-            if (!oldInfo || !newInfo) {
-                Logger.warn(`Could not extract content info for rename: ${oldContentPath} -> ${newContentPath}`);
-                return;
-            }
-            
-            // Check three possible media folder locations:
-            // 1. media/contentType/slug
-            // 2. media/slug
-            const possibleOldMediaFolders = [
-                path.join(this.workspacePath, 'media', oldInfo.contentType, oldInfo.slug),
-                path.join(this.workspacePath, 'media', oldInfo.slug)
-            ];
-            
-            // Find which media folder exists, if any
-            let oldMediaFolder: string | null = null;
-            let mediaFolderType: 'typed' | 'direct' = 'typed'; // Default to typed
-            
-            for (const [index, folderPath] of possibleOldMediaFolders.entries()) {
-                if (await fs.pathExists(folderPath)) {
-                    oldMediaFolder = folderPath;
-                    mediaFolderType = index === 0 ? 'typed' : 'direct';
-                    break;
-                }
-            }
-            
-            // If we found a media folder, rename it
-            if (oldMediaFolder) {
-                // Choose new media folder path based on the type of the old folder
-                let newMediaFolder: string;
-                
-                if (mediaFolderType === 'typed') {
-                    newMediaFolder = path.join(this.workspacePath, 'media', newInfo.contentType, newInfo.slug);
-                } else {
-                    newMediaFolder = path.join(this.workspacePath, 'media', newInfo.slug);
-                }
-                
-                Logger.info(`Renaming media folder: ${oldMediaFolder} -> ${newMediaFolder}`);
-                
-                // Ensure parent directory exists
-                await fs.ensureDir(path.dirname(newMediaFolder));
-                
-                try {
-                    // Move the entire folder with contents
-                    await fs.move(oldMediaFolder, newMediaFolder);
-                } catch (moveError) {
-                    Logger.warn(`Move operation failed, trying copy+remove: ${moveError}`);
-                    await fs.copy(oldMediaFolder, newMediaFolder, { overwrite: false });
-                    await fs.remove(oldMediaFolder);
-                }
-                
-                // Update references in content files
-                const mdxPath = newContentPath.endsWith('.mdx') 
-                    ? newContentPath 
-                    : this.getLinkedFilePath(newContentPath);
-                    
-                const jsonPath = newContentPath.endsWith('.json') 
-                    ? newContentPath 
-                    : this.getLinkedFilePath(newContentPath);
-                    
-                // Update MDX file if it exists
-                if (await fs.pathExists(mdxPath)) {
-                    await this.updateMediaReferencesForFolderRename(mdxPath, oldInfo.slug, newInfo.slug);
-                }
-                
-                // Update JSON file if it exists
-                if (await fs.pathExists(jsonPath)) {
-                    await ContentReferenceUtils.updateSlugReferencesInJson(jsonPath, oldInfo.slug, newInfo.slug);
-                }
-            } else {
-                // If no media folder exists yet, we should still check if we need to create one
-                const newDirectMediaFolder = path.join(this.workspacePath, 'media', newInfo.slug);
-                await fs.ensureDir(newDirectMediaFolder);
-                Logger.info(`Created empty media folder: ${newDirectMediaFolder}`);
-                
-                // Still update JSON references even if no media folder exists
-                const jsonPath = newContentPath.endsWith('.json') 
-                    ? newContentPath 
-                    : this.getLinkedFilePath(newContentPath);
-                    
-                if (await fs.pathExists(jsonPath)) {
-                    await ContentReferenceUtils.updateSlugReferencesInJson(jsonPath, oldInfo.slug, newInfo.slug);
-                }
-            }
-        } catch (error) {
-            Logger.error(`Error handling media folder rename for content file: ${error}`);
-        }
-    }
-    
-    /**
-     * Extract slug from media folder path
-     * Handles both media/slug and media/contentType/slug patterns
-     */
-    private extractSlugFromMediaPath(mediaPath: string): string | null {
-        try {
-            const relativePath = path.relative(this.workspacePath, mediaPath);
-            const pathParts = relativePath.split(path.sep);
-            
-            // Skip empty parts and "media" part
-            if (pathParts.length < 2 || pathParts[0] !== 'media') {
-                return null;
-            }
-            
-            // If direct under media/ folder, the slug is the next component
-            if (pathParts.length === 2) {
-                return pathParts[1];
-            }
-            
-            // If it follows media/contentType/slug pattern, return the slug
-            if (pathParts.length >= 3) {
-                return pathParts[pathParts.length - 1];
-            }
-            
-            return null;
-        } catch (error) {
-            Logger.error(`Error extracting slug from media path: ${mediaPath}`, error);
-            return null;
-        }
-    }
-    
-    /**
-     * Find and rename content files that match a media folder slug
-     */
-    private async findAndRenameContentFilesForMediaFolder(oldSlug: string, newSlug: string): Promise<void> {
-        try {
-            // Search for content files with matching slug
-            const contentTypes = await this.getContentTypes();
-            let matchFound = false;
-            
-            for (const contentType of contentTypes) {
-                const contentTypePath = path.join(this.workspacePath, 'content', contentType);
-                
-                // Skip if content type folder doesn't exist
-                if (!(await fs.pathExists(contentTypePath))) {
-                    continue;
-                }
-                
-                // Check for MDX file
-                const mdxPath = path.join(contentTypePath, `${oldSlug}.mdx`);
-                const jsonPath = path.join(contentTypePath, `${oldSlug}.json`);
-                
-                // If either file exists, handle the rename
-                if (await fs.pathExists(mdxPath) || await fs.pathExists(jsonPath)) {
-                    matchFound = true;
-                    Logger.info(`Found matching content files for media slug "${oldSlug}" in ${contentType}`);
-                    
-                    // Create new paths
-                    const newMdxPath = path.join(contentTypePath, `${newSlug}.mdx`);
-                    const newJsonPath = path.join(contentTypePath, `${newSlug}.json`);
-                    
-                    // Rename MDX file if it exists
-                    if (await fs.pathExists(mdxPath)) {
-                        Logger.info(`Renaming MDX file: ${mdxPath} -> ${newMdxPath}`);
-                        
-                        // First update references in the file
-                        await this.updateMediaReferencesForFolderRename(mdxPath, oldSlug, newSlug);
-                        
-                        // Then move the file
-                        await fs.move(mdxPath, newMdxPath, { overwrite: false });
-                        
-                        // Update index
-                        try {
-                            await this.indexService.updateAfterRename(mdxPath, newMdxPath);
-                        } catch (error) {
-                            Logger.warn(`Could not update index for ${mdxPath}, might not be indexed yet`);
-                        }
-                    }
-                    
-                    // Rename JSON file if it exists
-                    if (await fs.pathExists(jsonPath)) {
-                        Logger.info(`Renaming JSON file: ${jsonPath} -> ${newJsonPath}`);
-                        await fs.move(jsonPath, newJsonPath, { overwrite: false });
-                        
-                        // Update index
-                        try {
-                            await this.indexService.updateAfterRename(jsonPath, newJsonPath);
-                        } catch (error) {
-                            Logger.warn(`Could not update index for ${jsonPath}, might not be indexed yet`);
-                        }
-                    }
-                }
-            }
-            
-            if (!matchFound) {
-                Logger.info(`No matching content files found for media slug "${oldSlug}"`);
-            }
-        } catch (error) {
-            Logger.error(`Error finding and renaming content files: ${error}`);
-        }
-    }
-    
-    /**
-     * Get list of content types (folders under content/)
-     */
-    private async getContentTypes(): Promise<string[]> {
-        try {
-            const contentPath = path.join(this.workspacePath, 'content');
-            
-            if (!(await fs.pathExists(contentPath))) {
-                return [];
-            }
-            
-            const entries = await fs.readdir(contentPath, { withFileTypes: true });
-            return entries
-                .filter(entry => entry.isDirectory())
-                .map(dir => dir.name);
-        } catch (error) {
-            Logger.error(`Error getting content types: ${error}`);
-            return [];
-        }
-    }
-    
-    /**
-     * Update media references when a media folder is renamed
-     */
-    private async updateMediaReferencesForFolderRename(
-        mdxPath: string,
-        oldMediaSlug: string,
-        newMediaSlug: string
-    ): Promise<void> {
-        try {
-            if (!(await fs.pathExists(mdxPath))) {
-                return;
-            }
-            
-            // Use the consolidated utility method
-            const updated = await ContentReferenceUtils.updateReferencesInMdx(
-                mdxPath, 
-                oldMediaSlug, 
-                newMediaSlug, 
-                true // This is a slug rename
-            );
-            
-            if (updated) {
-                Logger.info(`Successfully updated references in ${mdxPath} from ${oldMediaSlug} to ${newMediaSlug}`);
-            }
-        } catch (error) {
-            Logger.error(`Error updating media references in ${mdxPath}: ${error}`);
-        }
-    }
-    
-    /**
      * Handle rename of content type folder (e.g., content/blog -> content/articles)
      */
     private async handleContentTypeFolderRename(oldPath: string, newPath: string): Promise<void> {
@@ -492,29 +206,12 @@ export class FileWatcherService {
             
             Logger.info(`Content type folder renamed: ${oldContentType} -> ${newContentType}`);
             
-            const oldMediaPath = path.join(this.workspacePath, 'media', oldContentType);
-            const newMediaPath = path.join(this.workspacePath, 'media', newContentType);
-            
-            // Check if old media folder exists
-            if (await fs.pathExists(oldMediaPath)) {
-                Logger.info(`Updating media folder for content type: ${oldContentType} -> ${newContentType}`);
-                
-                // Create the new media folder if it doesn't exist
-                await fs.ensureDir(newMediaPath);
-                
-                // Copy files from old media folder to new media folder
-                await fs.copy(oldMediaPath, newMediaPath);
-                
-                // Update references in all MDX files for the renamed content type
-                await ContentReferenceUtils.updateAllContentTypeReferences(
-                    this.workspacePath,
-                    oldContentType,
-                    newContentType
-                );
-                
-                // Remove the old media folder
-                await fs.remove(oldMediaPath);
-            }
+            // Update references in all MDX files for the renamed content type
+            await ContentReferenceUtils.updateAllContentTypeReferences(
+                this.workspacePath,
+                oldContentType,
+                newContentType
+            );
         } catch (error) {
             Logger.error(`Error handling content type folder rename:`, error);
         }
@@ -554,13 +251,31 @@ export class FileWatcherService {
     }
     
     /**
-     * Checks if a path is a media folder
+     * Checks if a file is a media file by its extension
+     * @param filePath Path to the file
+     * @returns True if the file is a media file
      */
-    private isMediaFolder(folderPath: string): boolean {
-        const relativePath = path.relative(this.workspacePath, folderPath);
-        return relativePath.startsWith('media' + path.sep);
+    private isMediaFile(filePath: string): boolean {
+        try {
+            // Get file extension
+            const fileExt = path.extname(filePath).toLowerCase();
+            
+            // List of common media file extensions
+            const mediaExtensions = [
+                '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', 
+                '.mp4', '.webm', '.mov', '.mp3', '.wav', '.pdf',
+                '.ico', '.bmp', '.tiff', '.avif'
+            ];
+            
+            // Check if extension is in the list of media extensions
+            return mediaExtensions.includes(fileExt);
+        } catch (error) {
+            // Log error but don't throw - safer to return false if we can't determine
+            Logger.error(`Error checking if file ${filePath} is a media file:`, error);
+            return false;
+        }
     }
-    
+
     /**
      * Get the path of the linked file (JSON for MDX and vice versa)
      */
@@ -586,56 +301,263 @@ export class FileWatcherService {
             const pathParts = relativePath.split(path.sep);
             
             // Verify this is a content file
-            if (pathParts.length >= 3 && 
+            if (pathParts.length >= 4 && 
                 pathParts[0] === 'content') {
                 
                 const contentType = pathParts[1];
+                const slug = pathParts[2];
                 const filename = pathParts[pathParts.length - 1];
                 
-                // Get slug by removing extension
-                let slug = filename;
-                if (slug.endsWith('.mdx')) {
-                    slug = slug.substring(0, slug.length - 4);
-                } else if (slug.endsWith('.json')) {
-                    slug = slug.substring(0, slug.length - 5);
+                // Check if it's an index file
+                if (filename === 'index.mdx' || filename === 'index.json') {
+                    return { contentType, slug };
                 }
                 
-                return { contentType, slug };
+                // If it's a media file in a content folder
+                if (pathParts.length === 4 && 
+                    !filename.endsWith('.mdx') && 
+                    !filename.endsWith('.json')) {
+                    return { contentType, slug };
+                }
             }
+            
+            return null;
         } catch (error) {
-            Logger.error(`Error extracting content file info: ${filePath}`, error);
+            Logger.error(`Error extracting content file info: ${error}`);
+            return null;
         }
-        return null;
     }
-    
+
     /**
-     * Handle media deletion when content is deleted
+     * Handle content media deletion when content is deleted
+     * With the new architecture, this method just ensures any media files 
+     * in the content folder are properly deleted along with the content
      */
     private async handleContentMediaDeletion(fileInfo: { contentType: string, slug: string }): Promise<void> {
         try {
             const { contentType, slug } = fileInfo;
+            const contentFolderPath = path.join(this.workspacePath, 'content', contentType, slug);
             
-            // Check for direct media folder (media/slug) first
-            const directMediaFolder = path.join(this.workspacePath, 'media', slug);
+            // Log the deletion
+            Logger.info(`Ensuring all content deleted from folder: ${contentFolderPath}`);
             
-            // Then check for typed media folder (media/contentType/slug)
-            const typedMediaFolder = path.join(this.workspacePath, 'media', contentType, slug);
-            
-            // Remove whichever media folder exists
-            if (await fs.pathExists(directMediaFolder)) {
-                Logger.info(`Deleting direct media folder for deleted content: ${directMediaFolder}`);
-                await fs.remove(directMediaFolder);
-            }
-            
-            if (await fs.pathExists(typedMediaFolder)) {
-                Logger.info(`Deleting typed media folder for deleted content: ${typedMediaFolder}`);
-                await fs.remove(typedMediaFolder);
+            // Check if the folder still exists (it might have been deleted already)
+            if (await fs.pathExists(contentFolderPath)) {
+                // Remove the entire content folder
+                await fs.remove(contentFolderPath);
+                Logger.info(`Removed content folder: ${contentFolderPath}`);
             }
         } catch (error) {
             Logger.error(`Error handling content media deletion:`, error);
         }
     }
-    
+
+    /**
+     * Handle rename of content slug folder
+     */
+    private async handleContentFolderRename(oldPath: string, newPath: string): Promise<void> {
+        try {
+            const oldRelPath = path.relative(this.workspacePath, oldPath);
+            const newRelPath = path.relative(this.workspacePath, newPath);
+            
+            const oldPathParts = oldRelPath.split(path.sep);
+            const newPathParts = newRelPath.split(path.sep);
+            
+            // Check if this is a content slug folder rename
+            if (oldPathParts.length >= 3 && 
+                newPathParts.length >= 3 && 
+                oldPathParts[0] === 'content' && 
+                newPathParts[0] === 'content') {
+                
+                const oldContentType = oldPathParts[1];
+                const newContentType = newPathParts[1];
+                const oldSlug = oldPathParts[2];
+                const newSlug = newPathParts[2];
+                
+                Logger.info(`Content folder renamed: ${oldContentType}/${oldSlug} -> ${newContentType}/${newSlug}`);
+                
+                // Update index for the MDX and JSON files
+                const oldMdxPath = path.join(oldPath, 'index.mdx');
+                const newMdxPath = path.join(newPath, 'index.mdx');
+                const oldJsonPath = path.join(oldPath, 'index.json');
+                const newJsonPath = path.join(newPath, 'index.json');
+                
+                // Update index entries
+                if (await fs.pathExists(newMdxPath)) {
+                    try {
+                        await this.indexService.updateAfterRename(oldMdxPath, newMdxPath);
+                    } catch (error) {
+                        Logger.warn(`Could not update index for ${oldMdxPath}, might not be indexed yet`);
+                    }
+                }
+                
+                if (await fs.pathExists(newJsonPath)) {
+                    try {
+                        await this.indexService.updateAfterRename(oldJsonPath, newJsonPath);
+                    } catch (error) {
+                        Logger.warn(`Could not update index for ${oldJsonPath}, might not be indexed yet`);
+                    }
+                }
+                
+                // If content type changed, we need to handle that differently
+                if (oldContentType !== newContentType) {
+                    // Need to update references in other files
+                    await ContentReferenceUtils.updateContentTypeReferencesInFolder(
+                        this.workspacePath,
+                        newPath,
+                        oldContentType,
+                        newContentType
+                    );
+                }
+                
+                // If slug changed, update the JSON file to reflect this
+                if (oldSlug !== newSlug && await fs.pathExists(newJsonPath)) {
+                    try {
+                        const jsonContent = await fs.readFile(newJsonPath, 'utf8');
+                        const metadata = JSON.parse(jsonContent);
+                        
+                        // Update any references in MDX that might still have old slug
+                        if (await fs.pathExists(newMdxPath)) {
+                            await ContentReferenceUtils.updateSlugReferencesInMdx(
+                                newMdxPath,
+                                oldSlug,
+                                newSlug
+                            );
+                        }
+                    } catch (error) {
+                        Logger.error(`Error updating references after folder rename: ${error}`);
+                    }
+                }
+            }
+        } catch (error) {
+            Logger.error(`Error handling content folder rename: ${error}`);
+        }
+    }
+
+    /**
+     * Checks if a path is a content folder (contains index.mdx or index.json)
+     */
+    private async isContentFolder(folderPath: string): Promise<boolean> {
+        try {
+            if (!(await fs.pathExists(folderPath))) {
+                return false;
+            }
+            
+            const stats = await fs.stat(folderPath);
+            if (!stats.isDirectory()) {
+                return false;
+            }
+            
+            // Check if folder contains index.mdx or index.json
+            return await fs.pathExists(path.join(folderPath, 'index.mdx')) || 
+                   await fs.pathExists(path.join(folderPath, 'index.json'));
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Handle media file rename within a content folder
+     */
+    private async handleMediaFileRename(oldPath: string, newPath: string): Promise<void> {
+        try {
+            const oldFileName = path.basename(oldPath);
+            const newFileName = path.basename(newPath);
+            
+            if (oldFileName === newFileName) {
+                // Only path changed, not the filename
+                return;
+            }
+            
+            Logger.info(`Handling media file rename: ${oldFileName} -> ${newFileName}`);
+            
+            // Extract content info for the containing folder
+            const contentInfo = this.extractContentFileInfo(oldPath);
+            if (!contentInfo) {
+                Logger.warn(`Could not determine content info for media file: ${oldPath}`);
+                return;
+            }
+            
+            // Check if this might be a rename back to an original path
+            const newRelPath = path.relative(this.workspacePath, newPath);
+            const oldRelPath = path.relative(this.workspacePath, oldPath);
+            
+            // Look for the file in the index with improved check
+            const targetExists = await this.isFileInIndex(newRelPath);
+            
+            // Update index
+            try {
+                // If renaming back to an original that exists in index but intermediate doesn't, 
+                // we don't need to update the index as it's already properly tracked
+                if (targetExists) {
+                    Logger.info(`Target ${newRelPath} exists in index, handling as rename back to original`);
+                } else {
+                    await this.indexService.updateAfterRename(oldPath, newPath);
+                }
+            } catch (error) {
+                // If the file isn't in the index, add it as a new file
+                if (await fs.pathExists(newPath)) {
+                    try {
+                        const { contentType, slug } = contentInfo;
+                        // Generate a temporary media ID based on path
+                        const mediaId = `local:${contentType}/${slug}/${newFileName}`;
+                        await this.indexService.addMediaEntry(mediaId, '', newPath);
+                        Logger.info(`Added new media file to index: ${newPath}`);
+                    } catch (addError) {
+                        Logger.error(`Failed to add new media file to index: ${addError}`);
+                    }
+                } else {
+                    Logger.warn(`Could not update index for ${oldRelPath}, might not be indexed yet`);
+                }
+            }
+            
+            // Always update references, regardless of index status
+            Logger.info(`Updating references to renamed media file: ${oldFileName} -> ${newFileName}`);
+            const updatedFiles = await ContentReferenceUtils.updateMediaFileReferencesAcrossProject(
+                this.workspacePath,
+                oldFileName,
+                newFileName
+            );
+            
+            if (updatedFiles > 0) {
+                Logger.info(`Successfully updated references in ${updatedFiles} files`);
+            } else {
+                Logger.info(`No references to update for ${oldFileName}`);
+            }
+        } catch (error) {
+            Logger.error(`Error handling media file rename: ${error}`);
+        }
+    }
+
+    /**
+     * Check if a file exists in the index
+     */
+    private async isFileInIndex(relativePath: string): Promise<boolean> {
+        try {
+            // Make sure we're loading the latest index state
+            const index = await this.indexService.loadIndex();
+            
+            // Check if the entry exists directly
+            if (index.entries[relativePath]) {
+                return true;
+            }
+            
+            // If not found directly, check if any entry points to this file in its originalPath
+            // This handles files that were renamed and might be getting renamed back
+            for (const entry of Object.values(index.entries)) {
+                if (entry.originalPath === relativePath || 
+                    (entry.originalState && entry.originalState.localPath === relativePath)) {
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            Logger.error(`Error checking if file exists in index: ${error}`);
+            return false;
+        }
+    }
+
     /**
      * Dispose the file watchers when no longer needed
      */
@@ -643,10 +565,6 @@ export class FileWatcherService {
         if (this.contentWatcher) {
             this.contentWatcher.dispose();
             this.contentWatcher = undefined;
-        }
-        if (this.mediaWatcher) {
-            this.mediaWatcher.dispose();
-            this.mediaWatcher = undefined;
         }
     }
 }

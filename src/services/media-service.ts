@@ -37,7 +37,7 @@ export class MediaService {
     }
 
     /**
-     * Uploads a media file, preserving folder structure
+     * Uploads a media file from a content folder to API
      */
     public async uploadMediaFile(filePath: string): Promise<string> {
         this.ensureWorkspaceExists();
@@ -47,67 +47,95 @@ export class MediaService {
             const fileContent = await fs.readFile(filePath);
             const fileName = path.basename(filePath);
             
+            // Extract content type and slug from path
+            const contentInfo = this.extractContentInfoFromPath(filePath);
+            if (!contentInfo || !contentInfo.contentType || !contentInfo.slug) {
+                throw new Error(`Unable to determine content type and slug for media file: ${filePath}`);
+            }
+            
             // Upload to API
             const url = await this.apiService.uploadMedia(fileContent, fileName);
-            
-            // Determine folder structure - get relative path if within workspace
-            const mediaDir = path.join(this.workspacePath!, 'media');
-            let relativePath = '';
-            
-            // Check if the file is within the workspace
-            if (filePath.startsWith(this.workspacePath!)) {
-                // Extract relative path within workspace
-                relativePath = path.relative(this.workspacePath!, path.dirname(filePath));
-                // Skip 'media' if it's already part of the path
-                if (relativePath.startsWith('media')) {
-                    relativePath = relativePath.substring(6); // 'media/'.length
-                }
-            }
-            
-            // Create the target directory structure
-            const targetDir = relativePath 
-                ? path.join(mediaDir, relativePath) 
-                : mediaDir;
-                
-            await fs.ensureDir(targetDir);
-            const destinationPath = path.join(targetDir, fileName);
-            
-            // Only copy if it's not already in the right location
-            if (filePath !== destinationPath) {
-                await fs.copy(filePath, destinationPath);
-            }
+            Logger.info(`Uploaded media file ${fileName} for content ${contentInfo.contentType}/${contentInfo.slug}`);
             
             return url;
         } catch (error) {
-            console.error('Failed to upload media file:', error);
+            Logger.error('Failed to upload media file:', error);
             throw error;
         }
     }
     
+    /**
+     * Get list of all media files across all content folders
+     */
     public async getAllMedia(): Promise<string[]> {
         this.ensureWorkspaceExists();
         
-        const mediaDir = path.join(this.workspacePath!, 'media');
+        const contentDir = path.join(this.workspacePath!, 'content');
+        const mediaFiles: string[] = [];
         
         try {
-            await fs.ensureDir(mediaDir);
-            const files = await fs.readdir(mediaDir);
-            return files;
+            // Ensure content directory exists
+            await fs.ensureDir(contentDir);
+            
+            // Get all content types (subdirectories of content/)
+            const contentTypes = await fs.readdir(contentDir);
+            
+            // For each content type directory
+            for (const contentType of contentTypes) {
+                const contentTypePath = path.join(contentDir, contentType);
+                
+                // Skip if not a directory
+                const contentTypeStat = await fs.stat(contentTypePath);
+                if (!contentTypeStat.isDirectory()) {
+                    continue;
+                }
+                
+                // Get all slugs (subdirectories of the content type)
+                const slugs = await fs.readdir(contentTypePath);
+                
+                // For each slug directory
+                for (const slug of slugs) {
+                    const slugPath = path.join(contentTypePath, slug);
+                    
+                    // Skip if not a directory
+                    const slugStat = await fs.stat(slugPath);
+                    if (!slugStat.isDirectory()) {
+                        continue;
+                    }
+                    
+                    // Get all files in the slug directory
+                    const files = await fs.readdir(slugPath);
+                    
+                    // Find media files (not index.mdx or index.json)
+                    for (const file of files) {
+                        if (file !== 'index.mdx' && file !== 'index.json') {
+                            const filePath = path.join(slugPath, file);
+                            const fileStat = await fs.stat(filePath);
+                            
+                            // If it's a file and has a media extension
+                            if (fileStat.isFile() && this.isMediaFile(filePath)) {
+                                mediaFiles.push(filePath);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return mediaFiles;
         } catch (error) {
-            console.error('Failed to get media files:', error);
+            Logger.error('Failed to get media files:', error);
             throw error;
         }
     }
 
     /**
-     * Downloads media from a URL and saves it to the media folder
+     * Downloads media from a URL and saves it to the appropriate content folder
      */
-    public async downloadMediaFromUrl(mediaUrl: string): Promise<string> {
+    public async downloadMediaFromUrl(mediaUrl: string, contentType?: string, contentSlug?: string): Promise<string> {
         this.ensureWorkspaceExists();
         
         try {
             // Clean up the URL to remove any surrounding characters that might make it invalid
-            // Don't log the sanitization process to reduce noise
             mediaUrl = this.sanitizeUrl(mediaUrl, false);
             
             // Get domain from config for URL parsing
@@ -122,7 +150,7 @@ export class MediaService {
                 if (mediaUrl.startsWith('http')) {
                     parsedUrl = new URL(mediaUrl);
                 } else {
-                    // Use the configured domain instead of placeholder.com
+                    // Use the configured domain
                     parsedUrl = new URL(`${config.domain}${mediaUrl}`);
                 }
             } catch (urlError) {
@@ -141,26 +169,83 @@ export class MediaService {
             // Parse the path segments
             const pathParts = parsedUrl.pathname.split('/').filter(part => part.trim() !== '');
             
-            // Handle /api/media/[folder]/[filename] structure
-            let folderPath = '';
+            // Extract filename
             let fileName = '';
             
             if (pathParts.length >= 3 && pathParts[0] === 'api' && pathParts[1] === 'media') {
-                // Extract folder path (everything between 'media' and the filename)
-                folderPath = pathParts.slice(2, pathParts.length - 1).join('/');
                 fileName = pathParts[pathParts.length - 1];
             } else {
                 // Fallback for URLs that don't match the expected pattern
                 fileName = pathParts[pathParts.length - 1];
             }
             
-            // Create the full media directory path including subdirectories
-            const mediaDir = path.join(this.workspacePath!, 'media');
-            const fullMediaDir = folderPath ? path.join(mediaDir, folderPath) : mediaDir;
-            await fs.ensureDir(fullMediaDir);
+            // Determine target directory based on provided content info
+            let targetDir: string;
             
-            // Determine the file path with subdirectories preserved
-            const filePath = path.join(fullMediaDir, fileName);
+            if (contentType && contentSlug) {
+                // If we know the content type and slug, store directly in content folder
+                targetDir = path.join(this.workspacePath!, 'content', contentType, contentSlug);
+            } else {
+                // For backward compatibility or when content info is not available,
+                // try to extract content info from URL
+                let extractedType = '';
+                let extractedSlug = '';
+                
+                // Try to parse content type and slug from URL if it follows API patterns
+                if (pathParts.length >= 4 && pathParts[0] === 'api' && pathParts[1] === 'media') {
+                    // Assume format is /api/media/[contentType]/[slug]/[filename]
+                    // or /api/media/[slug]/[filename]
+                    if (pathParts.length >= 5) {
+                        extractedType = pathParts[2];
+                        extractedSlug = pathParts[3];
+                    } else {
+                        // No content type in URL, just slug
+                        extractedSlug = pathParts[2];
+                    }
+                }
+                
+                if (extractedType && extractedSlug) {
+                    // If we could extract both, use them
+                    targetDir = path.join(this.workspacePath!, 'content', extractedType, extractedSlug);
+                } else if (extractedSlug) {
+                    // If only slug, try to find matching content folder
+                    const contentTypes = await this.getContentTypes();
+                    let foundDir = '';
+                    
+                    for (const type of contentTypes) {
+                        const possibleDir = path.join(this.workspacePath!, 'content', type, extractedSlug);
+                        if (await fs.pathExists(possibleDir)) {
+                            foundDir = possibleDir;
+                            break;
+                        }
+                    }
+                    
+                    if (foundDir) {
+                        targetDir = foundDir;
+                    } else {
+                        // Create a temporary directory in the first content type found
+                        if (contentTypes.length > 0) {
+                            // Use "media" slug in the first content type
+                            targetDir = path.join(this.workspacePath!, 'content', contentTypes[0], 'media');
+                            Logger.warn(`Couldn't determine content folder for media: ${mediaUrl}, using ${targetDir}`);
+                        } else {
+                            // No content types found, create "misc" content type with "media" slug
+                            targetDir = path.join(this.workspacePath!, 'content', 'misc', 'media');
+                            Logger.warn(`No content types found, creating folder for media: ${targetDir}`);
+                        }
+                    }
+                } else {
+                    // Unable to determine location, create a misc/media folder
+                    targetDir = path.join(this.workspacePath!, 'content', 'misc', 'media');
+                    Logger.warn(`Couldn't determine content folder for media: ${mediaUrl}, using ${targetDir}`);
+                }
+            }
+            
+            // Create the directory if it doesn't exist
+            await fs.ensureDir(targetDir);
+            
+            // Determine the file path
+            const filePath = path.join(targetDir, fileName);
             
             // Check if the file already exists
             if (await fs.pathExists(filePath)) {
@@ -327,7 +412,7 @@ export class MediaService {
     /**
      * Downloads all media files referenced in MDX content
      */
-    public async downloadMediaFromMdx(content: string): Promise<Map<string, string>> {
+    public async downloadMediaFromMdx(content: string, contentType?: string, contentSlug?: string): Promise<Map<string, string>> {
         const mediaUrls = this.extractMediaUrls(content);
         const mediaMap = new Map<string, string>();
         
@@ -335,7 +420,7 @@ export class MediaService {
         
         for (const url of mediaUrls) {
             try {
-                const localPath = await this.downloadMediaFromUrl(url);
+                const localPath = await this.downloadMediaFromUrl(url, contentType, contentSlug);
                 mediaMap.set(url, localPath);
             } catch (error) {
                 Logger.error(`Failed to download media from ${url}:`, error);
@@ -344,5 +429,196 @@ export class MediaService {
         }
         
         return mediaMap;
+    }
+
+    /**
+     * Convert local media references back to API URLs for pushing to CMS
+     */
+    public async convertLocalMediaToApiRefs(content: string, contentType: string, slug: string): Promise<string> {
+        if (!content) {
+            return content;
+        }
+        
+        let updatedContent = content;
+        const contentDir = path.join(this.workspacePath!, 'content', contentType, slug);
+        
+        // Regular expression to find local media references
+        const patterns = [
+            // Image in markdown: ![alt](filename.jpg)
+            /!\[.*?\]\(([^)]+)\)/g,
+            
+            // HTML img tag: <img src="filename.jpg" ... />
+            /<img[^>]*src=["']([^"']+)["'][^>]*>/g
+        ];
+        
+        for (const pattern of patterns) {
+            updatedContent = updatedContent.replace(pattern, (match, filePath) => {
+                // Skip URLs that already point to the API
+                if (filePath.includes('/api/media/')) {
+                    return match;
+                }
+                
+                // Skip external URLs
+                if (filePath.startsWith('http')) {
+                    return match;
+                }
+                
+                // Get just the filename if it's a full path
+                const fileName = path.basename(filePath);
+                
+                // Create API URL
+                const apiUrl = `/api/media/${contentType}/${slug}/${fileName}`;
+                
+                // Replace the file path with API URL
+                if (match.startsWith('![')) {
+                    // Markdown image
+                    return `![${match.substring(2, match.indexOf(']'))}](${apiUrl})`;
+                } else {
+                    // HTML img tag
+                    return match.replace(filePath, apiUrl);
+                }
+            });
+        }
+        
+        return updatedContent;
+    }
+
+    /**
+     * Get list of content types (folders under content/)
+     */
+    private async getContentTypes(): Promise<string[]> {
+        try {
+            const contentPath = path.join(this.workspacePath!, 'content');
+            
+            if (!(await fs.pathExists(contentPath))) {
+                return [];
+            }
+            
+            const entries = await fs.readdir(contentPath, { withFileTypes: true });
+            return entries
+                .filter(entry => entry.isDirectory())
+                .map(dir => dir.name);
+        } catch (error) {
+            Logger.error(`Error getting content types: ${error}`);
+            return [];
+        }
+    }
+
+    /**
+     * Extracts media URLs from JSON metadata
+     * @param metadata The JSON metadata object
+     */
+    public extractMediaUrlsFromMetadata(metadata: any): string[] {
+        if (!metadata) {
+            return [];
+        }
+
+        Logger.info('Analyzing metadata for media URLs');
+        const mediaUrls: string[] = [];
+        const foundUrls = new Set<string>(); // Track URLs to avoid duplicates
+        
+        // Helper function to recursively search for media URLs in objects
+        const findMediaUrls = (obj: any) => {
+            if (!obj || typeof obj !== 'object') {
+                return;
+            }
+            
+            // Handle arrays
+            if (Array.isArray(obj)) {
+                obj.forEach(item => findMediaUrls(item));
+                return;
+            }
+            
+            // Handle objects
+            Object.entries(obj).forEach(([key, value]) => {
+                // Check if property might contain a media URL
+                if (typeof value === 'string' && 
+                    (key === 'coverImageUrl' || key.includes('Url') || key.includes('Image')) && 
+                    value.includes('/api/media/')) {
+                    
+                    const sanitizedUrl = this.sanitizeUrl(value, false);
+                    
+                    if (!foundUrls.has(sanitizedUrl)) {
+                        foundUrls.add(sanitizedUrl);
+                        mediaUrls.push(sanitizedUrl);
+                        Logger.info(`Found media URL in metadata: ${sanitizedUrl}`);
+                    }
+                } 
+                // Recursively search nested objects
+                else if (value && typeof value === 'object') {
+                    findMediaUrls(value);
+                }
+            });
+        };
+        
+        findMediaUrls(metadata);
+        Logger.info(`Found ${mediaUrls.length} media URLs in metadata`);
+        return mediaUrls;
+    }
+    
+    /**
+     * Downloads all media files referenced in metadata
+     * @param metadata The JSON metadata object
+     * @param contentType The content type
+     * @param contentSlug The content slug
+     */
+    public async downloadMediaFromMetadata(
+        metadata: any, 
+        contentType?: string, 
+        contentSlug?: string
+    ): Promise<Map<string, string>> {
+        const mediaUrls = this.extractMediaUrlsFromMetadata(metadata);
+        const mediaMap = new Map<string, string>();
+        
+        Logger.info(`Found ${mediaUrls.length} media references in metadata`);
+        
+        for (const url of mediaUrls) {
+            try {
+                const localPath = await this.downloadMediaFromUrl(url, contentType, contentSlug);
+                mediaMap.set(url, localPath);
+            } catch (error) {
+                Logger.error(`Failed to download media from ${url}:`, error);
+                // Continue with other media files
+            }
+        }
+        
+        return mediaMap;
+    }
+    
+    /**
+     * Check if a file is a media file by its extension
+     */
+    private isMediaFile(filePath: string): boolean {
+        const mediaExtensions = [
+            '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', 
+            '.mp4', '.webm', '.mov', '.mp3', '.wav', '.pdf',
+            '.ico', '.bmp', '.tiff', '.avif'
+        ];
+        
+        const ext = path.extname(filePath).toLowerCase();
+        return mediaExtensions.includes(ext);
+    }
+    
+    /**
+     * Extract content type and slug from a file path
+     */
+    private extractContentInfoFromPath(filePath: string): { contentType?: string, slug?: string } | null {
+        try {
+            const relativePath = path.relative(this.workspacePath!, filePath);
+            const pathParts = relativePath.split(path.sep);
+            
+            // Check if this is a content file or media inside a content folder
+            if (pathParts.length >= 3 && pathParts[0] === 'content') {
+                return {
+                    contentType: pathParts[1],
+                    slug: pathParts[2]
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            Logger.error(`Error extracting content info from path: ${error}`);
+            return null;
+        }
     }
 }

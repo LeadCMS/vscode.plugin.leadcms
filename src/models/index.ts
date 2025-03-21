@@ -35,7 +35,7 @@ export interface IndexEntry {
     hash: string;              // Content hash for change detection
     
     // Sync metadata
-    lastSyncedAt: string;      // Timestamp of last sync with CMS
+    lastSyncedAt?: string;      // Timestamp of last sync with CMS
     lastModifiedLocal?: string;// Timestamp of last local modification
     lastModifiedRemote?: string;// Timestamp of last remote modification
     status: FileStatus;        // Current status

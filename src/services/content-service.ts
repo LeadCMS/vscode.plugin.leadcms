@@ -75,7 +75,30 @@ export class ContentService {
                     let mediaMap = new Map<string, string>();
                     if (content.body) {
                         try {
-                            mediaMap = await this.mediaService.downloadMediaFromMdx(content.body);
+                            // Pass content type and slug for proper media storage location
+                            const mdxMediaMap = await this.mediaService.downloadMediaFromMdx(
+                                content.body,
+                                content.type,
+                                content.slug
+                            );
+                            
+                            // Merge media maps
+                            mdxMediaMap.forEach((value, key) => {
+                                mediaMap.set(key, value);
+                            });
+                            
+                            // Also check for media in metadata (coverImageUrl, etc.)
+                            const metadataMediaMap = await this.mediaService.downloadMediaFromMetadata(
+                                content,
+                                content.type,
+                                content.slug
+                            );
+                            
+                            // Merge with existing map
+                            metadataMediaMap.forEach((value, key) => {
+                                mediaMap.set(key, value);
+                            });
+                            
                             mediaCount += mediaMap.size;
                             
                             // Track media files in the index
@@ -90,7 +113,13 @@ export class ContentService {
                             // If configured, replace remote media references with local ones
                             const config = await this.configService.getConfig();
                             if (config?.useLocalMediaReferences && mediaMap.size > 0) {
-                                content.body = replaceMediaReferences(content.body, mediaMap);
+                                // Pass content type and slug for proper path generation
+                                content.body = replaceMediaReferences(
+                                    content.body, 
+                                    mediaMap,
+                                    content.type,
+                                    content.slug
+                                );
                             }
                         } catch (mediaError) {
                             console.error(`Failed to process media for content ${content.id}:`, mediaError);
@@ -155,20 +184,21 @@ export class ContentService {
                 throw new Error(`Content ${content.id} is missing required 'type' property`);
             }
             
-            const contentFolder = path.join(this.workspacePath!, 'content', content.type);
+            // Create folder structure: content/contentType/slug/
+            const contentFolder = path.join(this.workspacePath!, 'content', content.type, content.slug);
             await fs.ensureDir(contentFolder);
             
-            // Save body content to MDX file
-            const mdxPath = path.join(contentFolder, `${content.slug}.mdx`);
+            // Save body content to index.mdx file
+            const mdxPath = path.join(contentFolder, 'index.mdx');
             await fs.writeFile(mdxPath, content.body || '', 'utf8');
             
-            // Save metadata to JSON file
-            const metadataPath = path.join(contentFolder, `${content.slug}.json`);
+            // Save metadata to index.json file, excluding the slug as it's part of the folder structure
+            const metadataPath = path.join(contentFolder, 'index.json');
             
-            // Create a new object without the body property
-            const { body, ...metadataWithoutBody } = content;
+            // Create a new object without the body and slug properties
+            const { body, slug, ...metadataWithoutBodyAndSlug } = content;
             
-            await fs.writeFile(metadataPath, JSON.stringify(metadataWithoutBody, null, 2), 'utf8');
+            await fs.writeFile(metadataPath, JSON.stringify(metadataWithoutBodyAndSlug, null, 2), 'utf8');
             
             return { mdxPath, metadataPath };
         } catch (error) {
@@ -181,19 +211,19 @@ export class ContentService {
         this.ensureWorkspaceExists();
         
         try {
-            const contentFolder = path.join(this.workspacePath!, 'content', type);
+            // Create folder structure: content/contentType/slug/
+            const contentFolder = path.join(this.workspacePath!, 'content', type, slug);
             await fs.ensureDir(contentFolder);
             
             // Create empty MDX file
-            const mdxPath = path.join(contentFolder, `${slug}.mdx`);
+            const mdxPath = path.join(contentFolder, 'index.mdx');
             const defaultBody = `# ${title}\n\nEnter your content here...`;
             await fs.writeFile(mdxPath, defaultBody, 'utf8');
             
-            // Create metadata JSON file with minimal details
-            const metadataPath = path.join(contentFolder, `${slug}.json`);
-            const metadata: Partial<ContentDetailsDto> = {
+            // Create metadata JSON file with minimal details (no slug as it's part of the folder structure)
+            const metadataPath = path.join(contentFolder, 'index.json');
+            const metadata: Omit<Partial<ContentDetailsDto>, 'slug'> = {
                 title,
-                slug,
                 type,
                 description: '',
                 author: '',
@@ -237,86 +267,107 @@ export class ContentService {
                     continue;
                 }
                 
-                const files = await fs.readdir(typeDir);
-                const jsonFiles = files.filter(file => file.endsWith('.json'));
+                // Get all slug folders in this content type
+                const slugFolders = await fs.readdir(typeDir);
                 
-                for (const jsonFile of jsonFiles) {
-                    const baseName = path.basename(jsonFile, '.json');
-                    const mdxFile = path.join(typeDir, `${baseName}.mdx`);
-                    const jsonFilePath = path.join(typeDir, jsonFile);
+                for (const slug of slugFolders) {
+                    const slugDir = path.join(typeDir, slug);
                     
-                    if (!await fs.pathExists(mdxFile)) {
-                        console.warn(`MDX file not found for ${jsonFilePath}`);
+                    // Check if it's a directory
+                    if (!(await fs.stat(slugDir)).isDirectory()) {
                         continue;
                     }
                     
-                    const metadataContent = await fs.readFile(jsonFilePath, 'utf8');
-                    const metadata = JSON.parse(metadataContent);
+                    const mdxPath = path.join(slugDir, 'index.mdx');
+                    const jsonPath = path.join(slugDir, 'index.json');
                     
-                    const bodyContent = await fs.readFile(mdxFile, 'utf8');
+                    // Skip if either file doesn't exist
+                    if (!await fs.pathExists(mdxPath) || !await fs.pathExists(jsonPath)) {
+                        Logger.warn(`Skipping incomplete content in ${slugDir}, missing index.mdx or index.json`);
+                        continue;
+                    }
                     
-                    if (metadata.id) {
-                        // Update existing content
-                        const updateDto: ContentUpdateDto = {
-                            title: metadata.title,
-                            description: metadata.description,
-                            body: bodyContent,
-                            slug: metadata.slug,
-                            author: metadata.author,
-                            language: metadata.language,
-                            tags: metadata.tags,
-                            category: metadata.category,
-                            coverImageUrl: metadata.coverImageUrl,
-                            allowComments: metadata.allowComments,
-                            publishedAt: metadata.publishedAt
-                        };
+                    try {
+                        const metadataContent = await fs.readFile(jsonPath, 'utf8');
+                        const metadata = JSON.parse(metadataContent);
                         
-                        const updatedContent = await this.apiService.updateContent(metadata.id, updateDto);
+                        // Add the slug from the folder name
+                        metadata.slug = slug;
                         
-                        // Update the index with the new state
-                        await this.indexService.updateAfterPush(
-                            updatedContent.id,
-                            mdxFile,
-                            jsonFilePath,
-                            updatedContent.updatedAt
-                        );
+                        // Process MDX content to convert local media references back to API URLs
+                        let bodyContent = await fs.readFile(mdxPath, 'utf8');
                         
-                        updatedCount++;
-                    } else {
-                        // Create new content
-                        const createDto: ContentCreateDto = {
-                            title: metadata.title,
-                            description: metadata.description,
-                            body: bodyContent,
-                            slug: metadata.slug,
-                            type: metadata.type || type,
-                            author: metadata.author,
-                            language: metadata.language,
-                            tags: metadata.tags,
-                            category: metadata.category,
-                            coverImageUrl: metadata.coverImageUrl,
-                            allowComments: metadata.allowComments,
-                            publishedAt: metadata.publishedAt
-                        };
+                        // Replace local media references with API URLs
+                        bodyContent = await this.mediaService.convertLocalMediaToApiRefs(bodyContent, type, slug);
                         
-                        const newContent = await this.apiService.createContent(createDto);
-                        
-                        // Update the local metadata with the new ID
-                        metadata.id = newContent.id;
-                        metadata.createdAt = newContent.createdAt;
-                        metadata.updatedAt = newContent.updatedAt;
-                        
-                        await fs.writeFile(jsonFilePath, JSON.stringify(metadata, null, 2), 'utf8');
-                        
-                        // Update the index with the new content
-                        await this.indexService.updateAfterPush(
-                            newContent.id,
-                            mdxFile,
-                            jsonFilePath,
-                            newContent.updatedAt
-                        );
-                        
-                        createdCount++;
+                        if (metadata.id) {
+                            // Update existing content
+                            const updateDto: ContentUpdateDto = {
+                                title: metadata.title,
+                                description: metadata.description,
+                                body: bodyContent,
+                                slug: slug, // Use the slug from the folder name
+                                author: metadata.author,
+                                language: metadata.language,
+                                tags: metadata.tags,
+                                category: metadata.category,
+                                coverImageUrl: metadata.coverImageUrl,
+                                allowComments: metadata.allowComments,
+                                publishedAt: metadata.publishedAt
+                            };
+                            
+                            const updatedContent = await this.apiService.updateContent(metadata.id, updateDto);
+                            
+                            // Update the index with the new state
+                            await this.indexService.updateAfterPush(
+                                updatedContent.id,
+                                mdxPath,
+                                jsonPath,
+                                updatedContent.updatedAt
+                            );
+                            
+                            updatedCount++;
+                        } else {
+                            // Create new content
+                            const createDto: ContentCreateDto = {
+                                title: metadata.title,
+                                description: metadata.description,
+                                body: bodyContent,
+                                slug: slug, // Use the slug from the folder name
+                                type: metadata.type || type,
+                                author: metadata.author,
+                                language: metadata.language,
+                                tags: metadata.tags,
+                                category: metadata.category,
+                                coverImageUrl: metadata.coverImageUrl,
+                                allowComments: metadata.allowComments,
+                                publishedAt: metadata.publishedAt
+                            };
+                            
+                            const newContent = await this.apiService.createContent(createDto);
+                            
+                            // Update the local metadata with the new ID
+                            metadata.id = newContent.id;
+                            metadata.createdAt = newContent.createdAt;
+                            metadata.updatedAt = newContent.updatedAt;
+                            
+                            // Remove slug as it's now part of the folder structure
+                            delete metadata.slug;
+                            
+                            await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+                            
+                            // Update the index with the new content
+                            await this.indexService.updateAfterPush(
+                                newContent.id,
+                                mdxPath,
+                                jsonPath,
+                                newContent.updatedAt
+                            );
+                            
+                            createdCount++;
+                        }
+                    } catch (error) {
+                        Logger.error(`Failed to process content at ${slugDir}:`, error);
                     }
                 }
             }

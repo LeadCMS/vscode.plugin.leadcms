@@ -332,4 +332,397 @@ export class ContentReferenceUtils {
             return false;
         }
     }
+
+    /**
+     * Updates slug references in MDX files
+     * 
+     * @param mdxPath Path to the MDX file
+     * @param oldSlug Old slug value
+     * @param newSlug New slug value
+     */
+    public static async updateSlugReferencesInMdx(
+        mdxPath: string,
+        oldSlug: string,
+        newSlug: string
+    ): Promise<boolean> {
+        try {
+            if (!await fs.pathExists(mdxPath)) {
+                return false;
+            }
+            
+            const content = await fs.readFile(mdxPath, 'utf8');
+            const escapedOld = this.escapeRegExp(oldSlug);
+            let replacementCount = 0;
+            
+            // Patterns for direct slug references
+            const patterns = [
+                // Direct slug references: oldSlug or /oldSlug/ or "oldSlug" or 'oldSlug'
+                new RegExp(`([\\s"\'/])${escapedOld}([\\s"\\'/])`, 'g'),
+                
+                // Template strings like blog/{slug}
+                new RegExp(`([\\w-]+\\/)\\{${escapedOld}\\}`, 'g')
+            ];
+            
+            let newContent = content;
+            
+            // Handle each pattern
+            for (const pattern of patterns) {
+                newContent = newContent.replace(pattern, (match, prefix, suffix) => {
+                    replacementCount++;
+                    
+                    if (match.includes('/{')) {
+                        // This is a template string like blog/{slug}
+                        return `${prefix}{${newSlug}}`;
+                    } else {
+                        // This is a direct slug reference with prefix and suffix
+                        return `${prefix}${newSlug}${suffix || ''}`;
+                    }
+                });
+            }
+            
+            // Save the file if changes were made
+            if (replacementCount > 0 && newContent !== content) {
+                Logger.info(`Updating ${replacementCount} slug references in ${mdxPath}`);
+                await fs.writeFile(mdxPath, newContent, 'utf8');
+                return true;
+            }
+            
+            return false;
+        } catch (error) {
+            Logger.error(`Error updating slug references in ${mdxPath}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Updates content type references within a folder
+     * 
+     * @param workspacePath Root workspace path
+     * @param folderPath Path to the content folder
+     * @param oldContentType Old content type
+     * @param newContentType New content type
+     */
+    public static async updateContentTypeReferencesInFolder(
+        workspacePath: string,
+        folderPath: string,
+        oldContentType: string,
+        newContentType: string
+    ): Promise<void> {
+        try {
+            // Check if the content directory exists
+            if (!await fs.pathExists(folderPath)) {
+                return;
+            }
+            
+            // Update MDX file
+            const mdxPath = path.join(folderPath, 'index.mdx');
+            if (await fs.pathExists(mdxPath)) {
+                const content = await fs.readFile(mdxPath, 'utf8');
+                const escapedOld = this.escapeRegExp(oldContentType);
+                
+                // Pattern for content type references
+                const pattern = new RegExp(`/${escapedOld}/`, 'g');
+                const newContent = content.replace(pattern, `/${newContentType}/`);
+                
+                if (newContent !== content) {
+                    Logger.info(`Updating content type references in ${mdxPath}`);
+                    await fs.writeFile(mdxPath, newContent, 'utf8');
+                }
+            }
+            
+            // Update JSON file if needed
+            const jsonPath = path.join(folderPath, 'index.json');
+            if (await fs.pathExists(jsonPath)) {
+                try {
+                    const jsonContent = await fs.readFile(jsonPath, 'utf8');
+                    let metadata = JSON.parse(jsonContent);
+                    let modified = false;
+                    
+                    // Update type if it exists
+                    if (metadata.type && metadata.type === oldContentType) {
+                        metadata.type = newContentType;
+                        modified = true;
+                    }
+                    
+                    // Update coverImageUrl if it contains the content type
+                    if (metadata.coverImageUrl && metadata.coverImageUrl.includes(`/${oldContentType}/`)) {
+                        metadata.coverImageUrl = metadata.coverImageUrl.replace(
+                            `/${oldContentType}/`, 
+                            `/${newContentType}/`
+                        );
+                        modified = true;
+                    }
+                    
+                    if (modified) {
+                        await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+                        Logger.info(`Updated content type in ${jsonPath}`);
+                    }
+                } catch (error) {
+                    Logger.error(`Error updating JSON content type: ${error}`);
+                }
+            }
+        } catch (error) {
+            Logger.error(`Error updating content type references:`, error);
+        }
+    }
+    
+    // Helper to escape special characters in regex
+    private static escapeRegExp(string: string): string {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    /**
+     * Updates references to a media file across all content files in the project
+     * 
+     * @param workspacePath Root workspace path
+     * @param oldFileName Original filename (not full path)
+     * @param newFileName New filename (not full path)
+     */
+    public static async updateMediaFileReferencesAcrossProject(
+        workspacePath: string,
+        oldFileName: string,
+        newFileName: string
+    ): Promise<number> {
+        try {
+            if (oldFileName === newFileName) {
+                Logger.info('Filenames are identical, no need to update references');
+                return 0;
+            }
+
+            // Get all content files in the project
+            const contentDir = path.join(workspacePath, 'content');
+            if (!await fs.pathExists(contentDir)) {
+                Logger.info('Content directory not found');
+                return 0;
+            }
+
+            // Find all MDX and JSON files
+            const mdxFiles = await this.findAllFilesWithExtension(contentDir, '.mdx');
+            const jsonFiles = await this.findAllFilesWithExtension(contentDir, '.json');
+            
+            Logger.info(`Found ${mdxFiles.length} MDX files and ${jsonFiles.length} JSON files to check for media references`);
+
+            let totalUpdatedFiles = 0;
+
+            // Process each MDX file
+            for (const mdxFile of mdxFiles) {
+                if (await this.updateMediaReferencesInFile(mdxFile, oldFileName, newFileName)) {
+                    totalUpdatedFiles++;
+                }
+            }
+            
+            // Process each JSON file
+            for (const jsonFile of jsonFiles) {
+                if (await this.updateMediaReferencesInJsonFile(jsonFile, oldFileName, newFileName)) {
+                    totalUpdatedFiles++;
+                }
+            }
+
+            Logger.info(`Media references updated in ${totalUpdatedFiles} files`);
+            return totalUpdatedFiles;
+        } catch (error) {
+            Logger.error('Failed to update media references across project:', error);
+            return 0;
+        }
+    }
+
+    /**
+     * Updates media references in a single MDX file
+     * 
+     * @param filePath Path to the MDX file
+     * @param oldFileName Original filename (not full path)
+     * @param newFileName New filename (not full path)
+     */
+    private static async updateMediaReferencesInFile(
+        filePath: string,
+        oldFileName: string,
+        newFileName: string
+    ): Promise<boolean> {
+        try {
+            // Read MDX content
+            const content = await fs.readFile(filePath, 'utf8');
+
+            // Check if the file contains references to the old filename
+            if (!content.includes(oldFileName)) {
+                return false;
+            }
+
+            // Create regex patterns to match different reference formats
+            const escapedOldName = this.escapeRegExp(oldFileName);
+            
+            // Patterns for media references
+            const patterns = [
+                // Basic filename reference
+                new RegExp(`(["'\`(/\\s])${escapedOldName}([)"'\`/\\s.:;,?!])`, 'g'),
+                
+                // Markdown image: ![alt](path/filename.ext)
+                new RegExp(`!\\[.*?\\]\\([^)]*${escapedOldName}\\)`, 'g'),
+                
+                // HTML img tag: <img src="path/filename.ext" />
+                new RegExp(`<img[^>]*src=["'][^"']*${escapedOldName}["'][^>]*>`, 'g')
+            ];
+
+            let newContent = content;
+            let fileUpdated = false;
+
+            // Apply each pattern replacement
+            for (const pattern of patterns) {
+                const updatedContent = newContent.replace(pattern, (match) => {
+                    fileUpdated = true;
+                    return match.replace(oldFileName, newFileName);
+                });
+
+                if (updatedContent !== newContent) {
+                    newContent = updatedContent;
+                }
+            }
+
+            // Save updated content if changes were made
+            if (fileUpdated) {
+                await fs.writeFile(filePath, newContent, 'utf8');
+                Logger.info(`Updated media references in ${filePath}`);
+                return true;
+            }
+
+            return false;
+        } catch (error) {
+            Logger.error(`Error updating media references in ${filePath}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Updates media references in a single JSON file
+     * 
+     * @param filePath Path to the JSON file
+     * @param oldFileName Original filename (not full path)
+     * @param newFileName New filename (not full path)
+     */
+    private static async updateMediaReferencesInJsonFile(
+        filePath: string,
+        oldFileName: string,
+        newFileName: string
+    ): Promise<boolean> {
+        try {
+            // Read JSON content
+            const content = await fs.readFile(filePath, 'utf8');
+
+            // Check if the file contains references to the old filename
+            if (!content.includes(oldFileName)) {
+                return false;
+            }
+            
+            let modified = false;
+
+            // Try to parse as JSON to handle it properly
+            try {
+                const jsonData = JSON.parse(content);
+                
+                // Helper function to recursively process objects
+                const updateReferencesInObject = (obj: any): boolean => {
+                    let objModified = false;
+                    
+                    if (!obj || typeof obj !== 'object') {
+                        return false;
+                    }
+                    
+                    // Handle arrays
+                    if (Array.isArray(obj)) {
+                        for (let i = 0; i < obj.length; i++) {
+                            if (typeof obj[i] === 'string' && obj[i].includes(oldFileName)) {
+                                obj[i] = obj[i].replace(oldFileName, newFileName);
+                                objModified = true;
+                            } else if (obj[i] && typeof obj[i] === 'object') {
+                                const nestedModified = updateReferencesInObject(obj[i]);
+                                objModified = objModified || nestedModified;
+                            }
+                        }
+                        return objModified;
+                    }
+                    
+                    // Handle regular objects
+                    for (const key of Object.keys(obj)) {
+                        const value = obj[key];
+                        
+                        if (typeof value === 'string' && value.includes(oldFileName)) {
+                            obj[key] = value.replace(oldFileName, newFileName);
+                            objModified = true;
+                        } else if (value && typeof value === 'object') {
+                            const nestedModified = updateReferencesInObject(value);
+                            objModified = objModified || nestedModified;
+                        }
+                    }
+                    
+                    return objModified;
+                };
+                
+                // Process the JSON data
+                modified = updateReferencesInObject(jsonData);
+                
+                // Save the updated JSON if modified
+                if (modified) {
+                    await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2), 'utf8');
+                    Logger.info(`Updated media references in ${filePath}`);
+                    return true;
+                }
+            } catch (jsonError) {
+                // If JSON parsing fails, use regex as a fallback
+                Logger.warn(`JSON parsing failed for ${filePath}, using regex fallback`);
+                
+                const escapedOldName = this.escapeRegExp(oldFileName);
+                const pattern = new RegExp(escapedOldName, 'g');
+                
+                if (pattern.test(content)) {
+                    const newContent = content.replace(pattern, newFileName);
+                    await fs.writeFile(filePath, newContent, 'utf8');
+                    Logger.info(`Updated media references in ${filePath} using regex fallback`);
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            Logger.error(`Error updating media references in JSON ${filePath}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Finds all MDX files in a directory recursively
+     */
+    private static async findAllMdxFiles(dirPath: string): Promise<string[]> {
+        return await this.findAllFilesWithExtension(dirPath, '.mdx');
+    }
+
+    /**
+     * Finds all files with a specific extension recursively
+     */
+    private static async findAllFilesWithExtension(dirPath: string, extension: string): Promise<string[]> {
+        try {
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+            
+            const files: string[] = [];
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry.name);
+                
+                if (entry.isDirectory()) {
+                    // Skip system directories
+                    if (['.git', 'node_modules', '.onlinesales'].includes(entry.name)) {
+                        continue;
+                    }
+                    
+                    // Recursively get files in subdirectories
+                    const subFiles = await this.findAllFilesWithExtension(fullPath, extension);
+                    files.push(...subFiles);
+                } else if (entry.name.toLowerCase().endsWith(extension)) {
+                    files.push(fullPath);
+                }
+            }
+            
+            return files;
+        } catch (error) {
+            Logger.error(`Error finding files with extension ${extension} in ${dirPath}:`, error);
+            return [];
+        }
+    }
 }

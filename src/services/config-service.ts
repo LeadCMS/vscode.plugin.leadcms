@@ -98,7 +98,6 @@ export class ConfigService {
         
         await fs.ensureDir(path.join(this.workspaceRoot!, '.onlinesales'));
         await fs.ensureDir(path.join(this.workspaceRoot!, 'content'));
-        await fs.ensureDir(path.join(this.workspaceRoot!, 'media'));
     }
 
     /**
