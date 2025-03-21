@@ -3,6 +3,7 @@ import { ConfigService } from './services/config-service';
 import { ApiService } from './services/api-service';
 import { ContentService } from './services/content-service';
 import { MediaService } from './services/media-service';
+import { GitService } from './services/git-service';
 import { OnlineSalesConfig, TokenConfig } from './models/config';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
         const apiService = new ApiService(configService);
         const contentService = new ContentService(apiService);
         const mediaService = new MediaService(apiService);
+        const gitService = new GitService(configService);
 
         console.log('Services initialized, registering commands...');
 
@@ -52,8 +54,32 @@ export function activate(context: vscode.ExtensionContext) {
                     domain: domain.trim()
                 };
 
-                await configService.saveConfig(config);
-                await configService.ensureDirectoriesExist();
+                // Show progress during initialization
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Initializing OnlineSales workspace...',
+                    cancellable: false
+                }, async (progress) => {
+                    // Step 1: Save config and create directory structure
+                    progress.report({ message: 'Creating directory structure...', increment: 20 });
+                    await configService.saveConfig(config);
+                    await configService.ensureDirectoriesExist();
+                    
+                    // Step 2: Initialize Git repository
+                    progress.report({ message: 'Initializing Git repository...', increment: 40 });
+                    try {
+                        const isGitInitialized = await gitService.initializeRepository();
+                        if (isGitInitialized) {
+                            progress.report({ message: 'Git repository initialized', increment: 40 });
+                        } else {
+                            progress.report({ message: 'Skipped Git initialization', increment: 40 });
+                        }
+                    } catch (gitError) {
+                        console.warn('Git initialization failed:', gitError);
+                        vscode.window.showWarningMessage(`Git initialization failed: ${gitError instanceof Error ? gitError.message : 'Unknown error'}. Continuing without Git.`);
+                        progress.report({ message: 'Continuing without Git...', increment: 40 });
+                    }
+                });
 
                 vscode.window.showInformationMessage('OnlineSales workspace initialized successfully.');
             } catch (error: any) {
