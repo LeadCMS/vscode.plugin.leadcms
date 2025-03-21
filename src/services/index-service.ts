@@ -616,8 +616,8 @@ export class IndexService {
         }
         
         // Get old and new relative paths
-        const oldRelPath = this.toRelativePath(oldPath);
-        const newRelPath = this.toRelativePath(newPath);
+        const oldRelPath = path.relative(this.workspacePath!, oldPath);
+        const newRelPath = path.relative(this.workspacePath!, newPath);
         
         // Check if the old path exists in our index
         const entry = this.index!.entries[oldRelPath];
@@ -626,11 +626,48 @@ export class IndexService {
             return;
         }
         
+        // Check if this is a rename back to the original path
+        if (entry.originalPath === newRelPath || (entry.originalState && entry.originalState.localPath === newRelPath)) {
+            Logger.info(`File renamed back to original path: ${newRelPath}`);
+            
+            // Restore original state if available
+            if (entry.originalState) {
+                // Create a new entry at the original path with original state
+                this.index!.entries[newRelPath] = {
+                    ...entry.originalState,
+                    // Keep the current hash which might have changed
+                    hash: entry.hash
+                };
+            } else {
+                // If no original state is saved, just move the entry and restore status
+                this.index!.entries[newRelPath] = {
+                    ...entry,
+                    localPath: newRelPath,
+                    status: FileStatus.SYNCED, // Reset to synced since it's back to original
+                    originalPath: undefined // Clear originalPath since it's no longer renamed
+                };
+            }
+            
+            // Delete the old entry
+            delete this.index!.entries[oldRelPath];
+            
+            await this.saveIndex();
+            return;
+        }
+        
+        // Normal rename handling
+        // Store original state if this is the first rename
+        let originalState = entry.originalState;
+        if (!originalState && entry.status !== FileStatus.RENAMED) {
+            originalState = { ...entry };
+        }
+        
         // Create a new entry for the renamed file
         this.index!.entries[newRelPath] = {
             ...entry,
             localPath: newRelPath,
-            originalPath: oldRelPath,
+            originalPath: entry.originalPath || oldRelPath, // Keep track of first original path
+            originalState: originalState, // Store the original state
             status: FileStatus.RENAMED,
             lastModifiedLocal: new Date().toISOString()
         };

@@ -31,6 +31,7 @@ export interface IndexEntry {
     // Local file information
     localPath: string;         // Path on local filesystem
     originalPath?: string;     // Original path if renamed
+    originalState?: Omit<IndexEntry, 'originalState'>; // Original state before rename
     hash: string;              // Content hash for change detection
     
     // Sync metadata
