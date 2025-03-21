@@ -11,6 +11,7 @@ import { Logger } from './utils/logger';
 import { AuthenticationError } from './utils/errors';
 import { IndexService } from './services/index-service';
 import { FileWatcherService } from './services/file-watcher-service';
+import { MediaValidationService } from './services/media-validation-service';
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize the logger
@@ -38,14 +39,12 @@ export function activate(context: vscode.ExtensionContext) {
             context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
         }
 
+        // Initialize the new media validation service
+        const mediaValidationService = new MediaValidationService(configService.getWorkspacePath(), mediaService);
+
         Logger.info('Services initialized, registering commands...');
 
-        // Add a command to show logs
-        const showLogsCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showLogs', () => {
-            Logger.show();
-        });
-
-        // Check workspace availability when the command is executed
+        // Function to check workspace availability when the command is executed
         function checkWorkspace(): boolean {
             if (!configService.hasWorkspace()) {
                 vscode.window.showErrorMessage('OnlineSales: This command requires an open workspace. Please open a folder first.');
@@ -53,6 +52,11 @@ export function activate(context: vscode.ExtensionContext) {
             }
             return true;
         }
+
+        // Command: Show Logs
+        const showLogsCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showLogs', () => {
+            Logger.show();
+        });
 
         // Command: Initialize Workspace
         const initializeWorkspaceCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.initializeWorkspace', async () => {
@@ -70,7 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
                         return input && input.trim().length > 0 ? null : 'Domain is required';
                     }
                 });
-
+                
                 if (!domain) {
                     vscode.window.showErrorMessage('Domain is required to initialize workspace.');
                     return;
@@ -81,12 +85,12 @@ export function activate(context: vscode.ExtensionContext) {
                     placeHolder: 'Replace remote media URLs with local references?',
                     canPickMany: false
                 });
-
+                
                 const config: OnlineSalesConfig = {
                     domain: domain.trim(),
                     useLocalMediaReferences: useLocalMediaReferences === 'Yes'
                 };
-
+                
                 // Show progress during initialization
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
@@ -113,20 +117,20 @@ export function activate(context: vscode.ExtensionContext) {
                         progress.report({ message: 'Continuing without Git...', increment: 40 });
                     }
                 });
-
+                
                 // Initialize file watcher for the newly set up workspace
                 if (!fileWatcherService) {
                     fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
                     // Add to disposables
                     context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
                 }
-
+                
                 vscode.window.showInformationMessage('OnlineSales workspace initialized successfully.');
             } catch (error: any) {
                 vscode.window.showErrorMessage(`Failed to initialize workspace: ${error.message}`);
             }
         });
-
+        
         // Command: Authenticate
         const authenticateCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.authenticate', async () => {
             try {
@@ -141,19 +145,19 @@ export function activate(context: vscode.ExtensionContext) {
                         return input && input.trim().length > 0 ? null : 'Access token is required';
                     }
                 });
-
+                
                 if (!token) {
                     vscode.window.showErrorMessage('Access token is required for authentication.');
                     return;
                 }
-
+                
                 const tokenConfig: TokenConfig = {
                     accessToken: token.trim()
                 };
 
                 await configService.saveToken(tokenConfig);
                 const isInitialized = await apiService.initialize();
-
+                
                 if (isInitialized) {
                     vscode.window.showInformationMessage('Authentication successful.');
                 } else {
@@ -163,7 +167,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(`Authentication failed: ${error.message}`);
             }
         });
-
+        
         // Command: Pull Content
         const pullContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.pullContent', async () => {
             try {
@@ -222,7 +226,7 @@ export function activate(context: vscode.ExtensionContext) {
                     });
             }
         });
-
+        
         // Command: New Content
         const newContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.newContent', async () => {
             try {
@@ -233,7 +237,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const type = await vscode.window.showQuickPick(['blog', 'page'], {
                     placeHolder: 'Select content type'
                 });
-
+                
                 if (!type) {
                     return;
                 }
@@ -244,7 +248,7 @@ export function activate(context: vscode.ExtensionContext) {
                         return input && input.trim().length > 0 ? null : 'Title is required';
                     }
                 });
-
+                
                 if (!title) {
                     return;
                 }
@@ -254,7 +258,7 @@ export function activate(context: vscode.ExtensionContext) {
                     .toLowerCase()
                     .replace(/[^a-z0-9]+/g, '-')
                     .replace(/^-|-$/g, '');
-
+                
                 const slug = await vscode.window.showInputBox({
                     prompt: 'Enter content slug',
                     value: suggestedSlug,
@@ -262,7 +266,7 @@ export function activate(context: vscode.ExtensionContext) {
                         return input && input.trim().length > 0 ? null : 'Slug is required';
                     }
                 });
-
+                
                 if (!slug) {
                     return;
                 }
@@ -272,7 +276,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(`Failed to create new content: ${error.message}`);
             }
         });
-
+        
         // Command: Push Content
         const pushContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.pushContent', async () => {
             try {
@@ -301,7 +305,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(`Failed to push content: ${error.message}`);
             }
         });
-
+        
         // Add a new command to show pending changes
         const showChangesCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showChanges', async () => {
             try {
@@ -312,11 +316,10 @@ export function activate(context: vscode.ExtensionContext) {
                 await contentService.showChanges();
             } catch (error: any) {
                 vscode.window.showErrorMessage(`Failed to show changes: ${error.message}`);
-            }
+            }   
         });
-
-        // Add debug commands
         
+        // Add debug commands
         // Command: Debug Index
         const debugIndexCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.debugIndex', async () => {
             try {
@@ -382,6 +385,38 @@ export function activate(context: vscode.ExtensionContext) {
             }
         });
 
+        // Command: Validate Media References
+        const validateMediaCommand = vscode.commands.registerCommand('onlinesales.validateMedia', async () => {
+            try {
+                const problemCount = await mediaValidationService.validateAllMediaReferences();
+                
+                if (problemCount === 0) {
+                    vscode.window.showInformationMessage('No missing media files found.');
+                } else {
+                    vscode.window.showWarningMessage(
+                        `Found ${problemCount} missing media references. Check Problems panel for details.`
+                    );
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error validating media: ${error}`);
+            }
+        });
+        
+        // Add file change listener for auto-validation
+        const fileWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(configService.getWorkspacePath(), '{content/**/*.mdx,content/**/*.json}')
+        );
+        
+        fileWatcher.onDidChange(async (uri) => {
+            await mediaValidationService.validateSingleFile(uri.fsPath);
+        });
+
+        fileWatcher.onDidCreate(async (uri) => {
+            await mediaValidationService.validateSingleFile(uri.fsPath);
+        });
+        
+        context.subscriptions.push(fileWatcher);
+        
         // Register all commands
         Logger.info('Pushing commands to subscriptions...');
         context.subscriptions.push(showLogsCommand);
@@ -393,6 +428,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(showChangesCommand); 
         context.subscriptions.push(debugIndexCommand);
         context.subscriptions.push(markRenamedCommand);
+        context.subscriptions.push(validateMediaCommand);
 
         // Only show the ready notification if we have a workspace
         if (configService.hasWorkspace()) {

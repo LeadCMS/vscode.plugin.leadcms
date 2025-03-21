@@ -50,6 +50,10 @@
       {
         "command": "onlinesales-vs-plugin.markRenamed",
         "title": "OnlineSales: Mark File as Renamed"
+      },
+      {
+        "command": "onlinesales.validateMedia",
+        "title": "OnlineSales: Validate Media References"
       }
     ]
   },
