@@ -34,6 +34,10 @@
       {
         "command": "onlinesales-vs-plugin.pushContent",
         "title": "OnlineSales: Push Content"
+      },
+      {
+        "command": "onlinesales-vs-plugin.showLogs",
+        "title": "OnlineSales: Show Logs"
       }
     ]
   },

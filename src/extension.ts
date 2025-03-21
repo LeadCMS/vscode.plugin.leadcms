@@ -5,19 +5,32 @@ import { ContentService } from './services/content-service';
 import { MediaService } from './services/media-service';
 import { GitService } from './services/git-service';
 import { OnlineSalesConfig, TokenConfig } from './models/config';
+import { Logger } from './utils/logger';
+import { AuthenticationError } from './utils/errors';
 
 export function activate(context: vscode.ExtensionContext) {
+    // Initialize the logger
+    Logger.init();
+    
     // Log activation with more details
-    console.log('Activating OnlineSales CMS extension...');
+    Logger.info('Activating OnlineSales CMS extension...');
     
     try {
         const configService = new ConfigService();
+        // Add configService to context.subscriptions for proper disposal
+        context.subscriptions.push({ dispose: () => configService.dispose() });
+        
         const apiService = new ApiService(configService);
-        const contentService = new ContentService(apiService);
         const mediaService = new MediaService(apiService);
+        const contentService = new ContentService(apiService, mediaService);
         const gitService = new GitService(configService);
 
-        console.log('Services initialized, registering commands...');
+        Logger.info('Services initialized, registering commands...');
+
+        // Add a command to show logs
+        const showLogsCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showLogs', () => {
+            Logger.show();
+        });
 
         // Check workspace availability when the command is executed
         function checkWorkspace(): boolean {
@@ -31,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Command: Initialize Workspace
         const initializeWorkspaceCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.initializeWorkspace', async () => {
             try {
-                console.log('Executing initialize workspace command...');
+                Logger.info('Executing initialize workspace command...');
                 
                 if (!checkWorkspace()) {
                     return;
@@ -49,9 +62,16 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage('Domain is required to initialize workspace.');
                     return;
                 }
+                
+                // Ask about local media references
+                const useLocalMediaReferences = await vscode.window.showQuickPick(['Yes', 'No'], {
+                    placeHolder: 'Replace remote media URLs with local references?',
+                    canPickMany: false
+                });
 
                 const config: OnlineSalesConfig = {
-                    domain: domain.trim()
+                    domain: domain.trim(),
+                    useLocalMediaReferences: useLocalMediaReferences === 'Yes'
                 };
 
                 // Show progress during initialization
@@ -75,7 +95,7 @@ export function activate(context: vscode.ExtensionContext) {
                             progress.report({ message: 'Skipped Git initialization', increment: 40 });
                         }
                     } catch (gitError) {
-                        console.warn('Git initialization failed:', gitError);
+                        Logger.warn('Git initialization failed:', gitError);
                         vscode.window.showWarningMessage(`Git initialization failed: ${gitError instanceof Error ? gitError.message : 'Unknown error'}. Continuing without Git.`);
                         progress.report({ message: 'Continuing without Git...', increment: 40 });
                     }
@@ -148,8 +168,25 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 });
             } catch (error: any) {
+                // Special handling for authentication errors
+                if (error instanceof AuthenticationError) {
+                    const action = await vscode.window.showErrorMessage(
+                        'Authentication failed: Your token is invalid or expired.', 
+                        'Re-authenticate',
+                        'View Logs'
+                    );
+                    
+                    if (action === 'Re-authenticate') {
+                        vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
+                    } else if (action === 'View Logs') {
+                        Logger.show();
+                    }
+                    return;
+                }
+                
+                // Regular error handling for other errors
                 const errorDetails = error.stack || error.message || String(error);
-                console.error('Pull content error details:', errorDetails);
+                Logger.error('Pull content error details:', errorDetails);
                 
                 // Show a more user-friendly error message
                 let errorMessage = `Failed to pull content: ${error.message}`;
@@ -160,11 +197,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(errorMessage, 'View Details')
                     .then(selection => {
                         if (selection === 'View Details') {
-                            // Create and show output channel with detailed error
-                            const outputChannel = vscode.window.createOutputChannel('OnlineSales CMS');
-                            outputChannel.appendLine('Error details:');
-                            outputChannel.appendLine(errorDetails);
-                            outputChannel.show();
+                            Logger.show();
                         }
                     });
             }
@@ -229,12 +262,29 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 await contentService.pushContent();
             } catch (error: any) {
+                // Special handling for authentication errors
+                if (error instanceof AuthenticationError) {
+                    const action = await vscode.window.showErrorMessage(
+                        'Authentication failed: Your token is invalid or expired.', 
+                        'Re-authenticate',
+                        'View Logs'
+                    );
+                    
+                    if (action === 'Re-authenticate') {
+                        vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
+                    } else if (action === 'View Logs') {
+                        Logger.show();
+                    }
+                    return;
+                }
+                
                 vscode.window.showErrorMessage(`Failed to push content: ${error.message}`);
             }
         });
 
         // Register all commands
-        console.log('Pushing commands to subscriptions...');
+        Logger.info('Pushing commands to subscriptions...');
+        context.subscriptions.push(showLogsCommand);
         context.subscriptions.push(initializeWorkspaceCommand);
         context.subscriptions.push(authenticateCommand);
         context.subscriptions.push(pullContentCommand);
@@ -246,13 +296,13 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('OnlineSales CMS extension is now ready.');
         }
         
-        console.log('OnlineSales CMS extension successfully activated!');
+        Logger.info('OnlineSales CMS extension successfully activated!');
     } catch (error) {
-        console.error('Error during extension activation:', error);
-        vscode.window.showErrorMessage('Failed to activate OnlineSales CMS extension. See console for details.');
+        Logger.error('Error during extension activation', error);
+        vscode.window.showErrorMessage('Failed to activate OnlineSales CMS extension. See logs for details.');
     }
 }
 
 export function deactivate() {
-    console.log('OnlineSales CMS extension deactivated');
+    Logger.info('OnlineSales CMS extension deactivated');
 }

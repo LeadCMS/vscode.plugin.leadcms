@@ -4,15 +4,21 @@ import * as path from 'path';
 import { ContentCreateDto, ContentDetailsDto, ContentUpdateDto } from '../models/content';
 import { ApiService } from './api-service';
 import { ConfigService } from './config-service';
+import { MediaService } from './media-service';
+import { replaceMediaReferences } from '../utils/mdx-utils';
+import { Logger } from '../utils/logger';
+import { AuthenticationError } from '../utils/errors';
 
 export class ContentService {
     private workspacePath: string | undefined;
     private apiService: ApiService;
     private configService: ConfigService;
+    private mediaService: MediaService;
     
-    constructor(apiService: ApiService) {
+    constructor(apiService: ApiService, mediaService: MediaService) {
         this.apiService = apiService;
         this.configService = apiService.getConfigService();
+        this.mediaService = mediaService;
         this.initialize();
     }
 
@@ -39,6 +45,7 @@ export class ContentService {
         this.ensureWorkspaceExists();
         
         try {
+            // Authentication errors from apiService.exportContent will be propagated directly
             const contents = await this.apiService.exportContent();
             
             if (!contents || contents.length === 0) {
@@ -48,6 +55,7 @@ export class ContentService {
             
             let successCount = 0;
             let errorCount = 0;
+            let mediaCount = 0;
             
             for (const content of contents) {
                 try {
@@ -57,7 +65,27 @@ export class ContentService {
                         continue;
                     }
                     
+                    // Download and process any media files first
+                    let mediaMap = new Map<string, string>();
+                    if (content.body) {
+                        try {
+                            mediaMap = await this.mediaService.downloadMediaFromMdx(content.body);
+                            mediaCount += mediaMap.size;
+                            
+                            // If configured, replace remote media references with local ones
+                            const config = await this.configService.getConfig();
+                            if (config?.useLocalMediaReferences && mediaMap.size > 0) {
+                                content.body = replaceMediaReferences(content.body, mediaMap);
+                            }
+                        } catch (mediaError) {
+                            console.error(`Failed to process media for content ${content.id}:`, mediaError);
+                            // Continue with other content - don't count this as an error
+                        }
+                    }
+                    
+                    // Then save the content to files (with possibly modified body)
                     await this.saveContentToFiles(content);
+                    
                     successCount++;
                 } catch (error) {
                     console.error(`Failed to save content ${content?.id || 'unknown'}:`, error);
@@ -65,8 +93,8 @@ export class ContentService {
                 }
             }
             
-            var message = successCount > 0 
-                ? `Successfully pulled ${successCount} content items.` 
+            let message = successCount > 0 
+                ? `Successfully pulled ${successCount} content items with ${mediaCount} media files.` 
                 : 'No content was pulled successfully.';
                 
             if (errorCount > 0) {
@@ -75,7 +103,12 @@ export class ContentService {
             
             vscode.window.showInformationMessage(message);
         } catch (error) {
-            console.error('Failed to pull content:', error);
+            // Don't wrap authentication errors, just pass them through
+            if (error instanceof AuthenticationError) {
+                throw error;
+            }
+            
+            Logger.error('Failed to pull content:', error);
             throw error;
         }
     }
@@ -86,7 +119,7 @@ export class ContentService {
                typeof content.id === 'number' &&
                typeof content.title === 'string' &&
                typeof content.slug === 'string' &&
-               typeof content.type === 'string'; // Ensure type is a string
+               typeof content.type === 'string';
     }
 
     private async saveContentToFiles(content: ContentDetailsDto): Promise<void> {
@@ -242,7 +275,12 @@ export class ContentService {
             
             vscode.window.showInformationMessage(`Successfully pushed content: ${createdCount} created, ${updatedCount} updated.`);
         } catch (error) {
-            console.error('Failed to push content:', error);
+            // Don't wrap authentication errors, just pass them through
+            if (error instanceof AuthenticationError) {
+                throw error;
+            }
+            
+            Logger.error('Failed to push content:', error);
             throw error;
         }
     }
