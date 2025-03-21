@@ -457,73 +457,18 @@ export class FileWatcherService {
     }
 
     /**
-     * Handle media file rename within a content folder
+     * Handle rename of media file
      */
     private async handleMediaFileRename(oldPath: string, newPath: string): Promise<void> {
         try {
-            const oldFileName = path.basename(oldPath);
-            const newFileName = path.basename(newPath);
-            
-            if (oldFileName === newFileName) {
-                // Only path changed, not the filename
-                return;
-            }
-            
-            Logger.info(`Handling media file rename: ${oldFileName} -> ${newFileName}`);
-            
-            // Extract content info for the containing folder
-            const contentInfo = this.extractContentFileInfo(oldPath);
-            if (!contentInfo) {
-                Logger.warn(`Could not determine content info for media file: ${oldPath}`);
-                return;
-            }
-            
-            // Check if this might be a rename back to an original path
-            const newRelPath = path.relative(this.workspacePath, newPath);
-            const oldRelPath = path.relative(this.workspacePath, oldPath);
-            
-            // Look for the file in the index with improved check
-            const targetExists = await this.isFileInIndex(newRelPath);
-            
-            // Update index
-            try {
-                // If renaming back to an original that exists in index but intermediate doesn't, 
-                // we don't need to update the index as it's already properly tracked
-                if (targetExists) {
-                    Logger.info(`Target ${newRelPath} exists in index, handling as rename back to original`);
-                } else {
-                    await this.indexService.updateAfterRename(oldPath, newPath);
-                }
-            } catch (error) {
-                // If the file isn't in the index, add it as a new file
-                if (await fs.pathExists(newPath)) {
-                    try {
-                        const { contentType, slug } = contentInfo;
-                        // Generate a temporary media ID based on path
-                        const mediaId = `local:${contentType}/${slug}/${newFileName}`;
-                        await this.indexService.addMediaEntry(mediaId, '', newPath);
-                        Logger.info(`Added new media file to index: ${newPath}`);
-                    } catch (addError) {
-                        Logger.error(`Failed to add new media file to index: ${addError}`);
-                    }
-                } else {
-                    Logger.warn(`Could not update index for ${oldRelPath}, might not be indexed yet`);
-                }
-            }
-            
-            // Always update references, regardless of index status
-            Logger.info(`Updating references to renamed media file: ${oldFileName} -> ${newFileName}`);
-            const updatedFiles = await ContentReferenceUtils.updateMediaFileReferencesAcrossProject(
-                this.workspacePath,
-                oldFileName,
-                newFileName
+            // Update references in other files in the same folder
+            const updatedCount = await ContentReferenceUtils.updateMediaFileReferencesInFolder(
+                oldPath, 
+                newPath
             );
             
-            if (updatedFiles > 0) {
-                Logger.info(`Successfully updated references in ${updatedFiles} files`);
-            } else {
-                Logger.info(`No references to update for ${oldFileName}`);
-            }
+            Logger.info(`Updated media references in ${updatedCount} files after renaming ${path.basename(oldPath)} to ${path.basename(newPath)}`);
+            
         } catch (error) {
             Logger.error(`Error handling media file rename: ${error}`);
         }

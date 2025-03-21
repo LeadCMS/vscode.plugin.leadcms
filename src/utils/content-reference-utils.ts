@@ -472,35 +472,44 @@ export class ContentReferenceUtils {
     }
 
     /**
-     * Updates references to a media file across all content files in the project
+     * Updates references to a media file in the same folder
      * 
      * @param workspacePath Root workspace path
-     * @param oldFileName Original filename (not full path)
-     * @param newFileName New filename (not full path)
+     * @param oldFilePath Original file path
+     * @param newFilePath New file path
      */
-    public static async updateMediaFileReferencesAcrossProject(
-        workspacePath: string,
-        oldFileName: string,
-        newFileName: string
+    public static async updateMediaFileReferencesInFolder(
+        oldFilePath: string,
+        newFilePath: string
     ): Promise<number> {
         try {
+            const oldFileName = path.basename(oldFilePath);
+            const newFileName = path.basename(newFilePath);
+            
             if (oldFileName === newFileName) {
                 Logger.info('Filenames are identical, no need to update references');
                 return 0;
             }
 
-            // Get all content files in the project
-            const contentDir = path.join(workspacePath, 'content');
-            if (!await fs.pathExists(contentDir)) {
-                Logger.info('Content directory not found');
+            // Get the folder containing the media file
+            const folderPath = path.dirname(oldFilePath);
+            
+            if (!await fs.pathExists(folderPath)) {
+                Logger.info(`Folder ${folderPath} not found`);
                 return 0;
             }
 
-            // Find all MDX and JSON files
-            const mdxFiles = await this.findAllFilesWithExtension(contentDir, '.mdx');
-            const jsonFiles = await this.findAllFilesWithExtension(contentDir, '.json');
+            // Find MDX and JSON files in the same folder
+            const files = await fs.readdir(folderPath);
+            const mdxFiles = files
+                .filter(f => f.endsWith('.mdx'))
+                .map(f => path.join(folderPath, f));
             
-            Logger.info(`Found ${mdxFiles.length} MDX files and ${jsonFiles.length} JSON files to check for media references`);
+            const jsonFiles = files
+                .filter(f => f.endsWith('.json'))
+                .map(f => path.join(folderPath, f));
+            
+            Logger.info(`Found ${mdxFiles.length} MDX files and ${jsonFiles.length} JSON files in the same folder to check for media references`);
 
             let totalUpdatedFiles = 0;
 
@@ -518,10 +527,11 @@ export class ContentReferenceUtils {
                 }
             }
 
-            Logger.info(`Media references updated in ${totalUpdatedFiles} files`);
+            Logger.info(`Media references updated in ${totalUpdatedFiles} files in the same folder`);
             return totalUpdatedFiles;
+            
         } catch (error) {
-            Logger.error('Failed to update media references across project:', error);
+            Logger.error(`Error updating media references:`, error);
             return 0;
         }
     }
