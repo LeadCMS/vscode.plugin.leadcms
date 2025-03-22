@@ -64,6 +64,9 @@ export class ContentService {
             // Get IDs of all remote content for later comparison
             const remoteIds = contents.map(content => content.id);
             
+            // Get config once for all content
+            const config = await this.configService.getConfig();
+            
             for (const content of contents) {
                 try {
                     if (!this.isValidContent(content)) {
@@ -72,15 +75,19 @@ export class ContentService {
                         continue;
                     }
                     
+                    // Create a working copy of the content that we'll modify
+                    const workingContent = { ...content };
+                    
                     // Download and process any media files first
                     let mediaMap = new Map<string, string>();
-                    if (content.body) {
+                    
+                    if (workingContent.body) {
                         try {
                             // Pass content type and slug for proper media storage location
                             const mdxMediaMap = await this.mediaService.downloadMediaFromMdx(
-                                content.body,
-                                content.type,
-                                content.slug
+                                workingContent.body,
+                                workingContent.type,
+                                workingContent.slug
                             );
                             
                             // Merge media maps
@@ -89,10 +96,10 @@ export class ContentService {
                             });
                             
                             // Also check for media in metadata (coverImageUrl, etc.)
-                            const metadataMediaMap = await this.mediaService.downloadMediaFromMetadata(
-                                content,
-                                content.type,
-                                content.slug
+                            const [metadataMediaMap, updatedMetadata] = await this.mediaService.downloadMediaFromMetadata(
+                                workingContent,
+                                workingContent.type,
+                                workingContent.slug
                             );
                             
                             // Merge with existing map
@@ -111,28 +118,40 @@ export class ContentService {
                                 await this.indexService.addMediaEntry(mediaId, remoteUrl, localPath);
                             }
                             
-                            // If configured, replace remote media references with local ones
-                            const config = await this.configService.getConfig();
-                            if (config?.useLocalMediaReferences && mediaMap.size > 0) {
-                                // Pass content type and slug for proper path generation
-                                content.body = replaceMediaReferences(
-                                    content.body, 
+                            // Update the working content with the processed metadata values
+                            if (updatedMetadata) {
+                                // Copy all properties except 'body' which we'll handle separately
+                                Object.keys(updatedMetadata).forEach(key => {
+                                    if (key !== 'body') {
+                                        // Use type assertion to fix the TypeScript error
+                                        (workingContent as any)[key] = (updatedMetadata as any)[key];
+                                    }
+                                });
+                            }
+                            
+                            // Always replace remote media references with local ones if we have media
+                            if (mediaMap.size > 0) {
+                                // Update the MDX content body with local references
+                                workingContent.body = replaceMediaReferences(
+                                    workingContent.body, 
                                     mediaMap,
-                                    content.type,
-                                    content.slug
+                                    workingContent.type,
+                                    workingContent.slug
                                 );
+                                
+                                Logger.info(`Replaced media references in content body for ${workingContent.slug}`);
                             }
                         } catch (mediaError) {
-                            console.error(`Failed to process media for content ${content.id}:`, mediaError);
+                            console.error(`Failed to process media for content ${workingContent.id}:`, mediaError);
                             // Continue with other content - don't count this as an error
                         }
                     }
                     
-                    // Then save the content to files (with possibly modified body)
-                    const { mdxPath, metadataPath } = await this.saveContentToFiles(content);
+                    // Then save the content to files (with now modified body and metadata)
+                    const { mdxPath, metadataPath } = await this.saveContentToFiles(workingContent);
                     
                     // Add to index
-                    await this.indexService.addOrUpdateContentEntry(content, mdxPath, metadataPath);
+                    await this.indexService.addOrUpdateContentEntry(workingContent, mdxPath, metadataPath);
                     
                     successCount++;
                 } catch (error) {

@@ -5,6 +5,7 @@ import axios from 'axios';
 import { ApiService } from './api-service';
 import { ConfigService } from './config-service';
 import { Logger } from '../utils/logger';
+import { replaceMediaReferencesInMetadata } from '../utils/mdx-utils';
 
 export class MediaService {
     private workspacePath: string | undefined;
@@ -592,18 +593,51 @@ export class MediaService {
      * @param metadata The JSON metadata object
      * @param contentType The content type
      * @param contentSlug The content slug
+     * @returns A tuple containing the map of remote URLs to local paths and the updated metadata
      */
     public async downloadMediaFromMetadata(
         metadata: any, 
         contentType?: string, 
         contentSlug?: string
-    ): Promise<Map<string, string>> {
+    ): Promise<[Map<string, string>, any]> {
+        if (!metadata) {
+            return [new Map<string, string>(), metadata];
+        }
+        
         const mediaUrls = this.extractMediaUrlsFromMetadata(metadata);
+        
+        if (mediaUrls.length === 0) {
+            return [new Map<string, string>(), metadata];
+        }
+        
+        const mediaMap = await this.downloadMediaFiles(mediaUrls, contentType, contentSlug);
+        
+        // Transform the metadata to use the local file references
+        const updatedMetadata = replaceMediaReferencesInMetadata(
+            metadata,
+            mediaMap,
+            contentType,
+            contentSlug
+        );
+        
+        return [mediaMap, updatedMetadata];
+    }
+    
+    /**
+     * Download multiple media files from URLs
+     * @param urls Array of media URLs to download
+     * @param contentType The content type
+     * @param contentSlug The content slug
+     * @returns A map of remote URLs to local file paths
+     */
+    private async downloadMediaFiles(
+        urls: string[],
+        contentType?: string,
+        contentSlug?: string
+    ): Promise<Map<string, string>> {
         const mediaMap = new Map<string, string>();
         
-        Logger.info(`Found ${mediaUrls.length} media references in metadata`);
-        
-        for (const url of mediaUrls) {
+        for (const url of urls) {
             try {
                 const localPath = await this.downloadMediaFromUrl(url, contentType, contentSlug);
                 mediaMap.set(url, localPath);
