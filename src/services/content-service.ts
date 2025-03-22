@@ -9,6 +9,7 @@ import { replaceMediaReferences } from '../utils/mdx-utils';
 import { Logger } from '../utils/logger';
 import { AuthenticationError } from '../utils/errors';
 import { IndexService } from './index-service';
+import { showErrorWithDetails } from '../utils/ui-helpers';
 
 export class ContentService {
     private workspacePath: string | undefined;
@@ -448,7 +449,7 @@ export class ContentService {
             outputChannel.show();
         } catch (error) {
             Logger.error('Failed to show changes:', error);
-            vscode.window.showErrorMessage(`Failed to show changes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            showErrorWithDetails('Failed to show changes', error);
         }
     }
 }

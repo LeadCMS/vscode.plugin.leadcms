@@ -2,9 +2,22 @@ import axios, { AxiosInstance } from 'axios';
 import * as vscode from 'vscode';
 import { ContentCreateDto, ContentDetailsDto, ContentUpdateDto } from '../models/content';
 import { ConfigService } from './config-service';
-import { MockService } from './mock-service';
 import { Logger } from '../utils/logger';
 import { AuthenticationError } from '../utils/errors';
+// Update import to include the new helper
+import { 
+    showErrorWithDetails, 
+    showErrorWithLogsOption,
+    handleWorkspaceNotInitializedError
+} from '../utils/ui-helpers';
+
+// New error class for workspace initialization issues
+export class WorkspaceNotInitializedError extends Error {
+    constructor(message: string = 'Workspace not initialized') {
+        super(message);
+        this.name = 'WorkspaceNotInitializedError';
+    }
+}
 
 export class ApiService {
     private client: AxiosInstance | undefined;
@@ -53,7 +66,8 @@ export class ApiService {
             
             return true;
         } catch (error) {
-            Logger.error('Failed to initialize API client', error);
+            Logger.error('Failed to initialize API service:', error);
+            showErrorWithDetails('Failed to initialize API connection', error);
             return false;
         }
     }
@@ -62,7 +76,9 @@ export class ApiService {
      * Set up request and response interceptors for logging
      */
     private setupInterceptors(): void {
-        if (!this.client) return;
+        if (!this.client) {
+            return;
+        }
         
         // Add request interceptor for logging
         this.client.interceptors.request.use(
@@ -111,33 +127,53 @@ export class ApiService {
 
     /**
      * Ensure API client is initialized with fresh configuration
+     * @throws WorkspaceNotInitializedError if client cannot be initialized
      */
     private async ensureClientInitialized(): Promise<boolean> {
         // Always reinitialize the client to get fresh config
-        return await this.initialize();
+        const initialized = await this.initialize();
+        if (!initialized) {
+            throw new WorkspaceNotInitializedError('API client not initialized. Please initialize your workspace.');
+        }
+        return true;
     }
 
     public async exportContent(): Promise<ContentDetailsDto[]> {
-        // Ensure fresh client with latest config
-        if (!await this.ensureClientInitialized()) {
-            // If initialization fails, use mock data
-            Logger.info('API client not initialized, using mock data');
-            return MockService.getMockContent();
-        }
-
-        // Now the client is definitely initialized with fresh config
         try {
-            Logger.info('Fetching content from API...');
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
             
-            let responseData: any;
+            Logger.info('Fetching content from API...');
             
             try {
                 // Try to fetch from the real API endpoint
                 const response = await this.client!.get<any>('/content/export');
-                responseData = response.data;
+                const responseData = response.data;
                 
                 // Additional debug logging (basic logging is handled by interceptors)
                 Logger.info(`API response type: ${typeof responseData}, Is array: ${Array.isArray(responseData)}`);
+                
+                // Convert response to array if needed
+                const contentArray = this.ensureResponseIsArray(responseData);
+                
+                // Debug log the response structure
+                Logger.info(`API returned ${contentArray.length || 0} content items`);
+                
+                // Validate and filter out invalid content
+                const validContent = contentArray.filter(item => 
+                    item && 
+                    typeof item === 'object' && 
+                    item.id && 
+                    item.title && 
+                    item.slug && 
+                    item.type
+                );
+                
+                if (validContent.length < contentArray.length) {
+                    Logger.info(`Filtered out ${contentArray.length - validContent.length} invalid content items`);
+                }
+                
+                return validContent;
             } catch (apiError: any) {
                 // Check specifically for authentication errors
                 if (axios.isAxiosError(apiError) && apiError.response?.status === 401) {
@@ -145,47 +181,32 @@ export class ApiService {
                     throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
                 }
                 
-                // For other API errors, fall back to mock data
-                Logger.error('API request failed, using mock data for testing', apiError);
-                
-                responseData = MockService.getMockContent();
-                Logger.info(`Using mock data with ${responseData.length} items`);
+                // For other API errors, propagate them
+                throw apiError;
             }
-            
-            // Convert response to array if needed
-            const contentArray = this.ensureResponseIsArray(responseData);
-            
-            // Debug log the response structure
-            Logger.info(`API returned ${contentArray.length || 0} content items`);
-            
-            // Validate and filter out invalid content
-            const validContent = contentArray.filter(item => 
-                item && 
-                typeof item === 'object' && 
-                item.id && 
-                item.title && 
-                item.slug && 
-                item.type
-            );
-            
-            if (validContent.length < contentArray.length) {
-                Logger.info(`Filtered out ${contentArray.length - validContent.length} invalid content items`);
-            }
-            
-            return validContent;
         } catch (error) {
+            // Handle workspace initialization errors with a prompt
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+            }
+            
             // Pass authentication errors to be handled by the caller
             if (error instanceof AuthenticationError) {
                 throw error;
             }
             
             Logger.error('Failed to export content', error);
+            // Replace direct error message with utility function
+            showErrorWithLogsOption('Failed to fetch content from API', error);
             if (error instanceof Error) {
                 throw new Error(`Failed to export content: ${error.message}`);
             } else {
                 throw new Error('Failed to export content: Unknown error');
             }
         }
+        
+        // Return empty array if we get here after showing the dialog
+        return [];
     }
     
     /**
@@ -231,50 +252,58 @@ export class ApiService {
     }
 
     public async createContent(content: ContentCreateDto): Promise<ContentDetailsDto> {
-        // Ensure fresh client with latest config
-        if (!await this.ensureClientInitialized()) {
-            throw new Error('API client not initialized');
-        }
-
         try {
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
+
             const response = await this.client!.post<ContentDetailsDto>('/content', content);
             return response.data;
         } catch (error: any) {
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+                throw new Error('Workspace not initialized');
+            }
+
             if (axios.isAxiosError(error) && error.response?.status === 401) {
                 Logger.error('Authentication failed (401 Unauthorized)', error);
                 throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
             }
             Logger.error('Failed to create content', error);
+            // Replace direct error message with utility function
+            showErrorWithDetails('Failed to create content', error);
             throw new Error('Failed to create content');
         }
     }
 
     public async updateContent(id: string, content: ContentUpdateDto): Promise<ContentDetailsDto> {
-        // Ensure fresh client with latest config
-        if (!await this.ensureClientInitialized()) {
-            throw new Error('API client not initialized');
-        }
-
         try {
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
+
             const response = await this.client!.patch<ContentDetailsDto>(`/content/${id}`, content);
             return response.data;
         } catch (error: any) {
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+                throw new Error('Workspace not initialized');
+            }
+
             if (axios.isAxiosError(error) && error.response?.status === 401) {
                 Logger.error('Authentication failed (401 Unauthorized)', error);
                 throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
             }
             Logger.error(`Failed to update content with ID ${id}:`, error);
+            // Replace direct error message with utility function
+            showErrorWithDetails('Failed to update content', error);
             throw new Error(`Failed to update content with ID ${id}`);
         }
     }
 
     public async uploadMedia(file: Buffer, filename: string): Promise<string> {
-        // Ensure fresh client with latest config
-        if (!await this.ensureClientInitialized()) {
-            throw new Error('API client not initialized');
-        }
-
         try {
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
+
             const formData = new FormData();
             const blob = new Blob([file], { type: 'application/octet-stream' });
             formData.append('file', blob, filename);
@@ -289,8 +318,19 @@ export class ApiService {
             
             return response.data.url;
         } catch (error) {
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+                throw new Error('Workspace not initialized');
+            }
+
             Logger.error(`Failed to upload media: ${filename}`, error);
             throw new Error('Failed to upload media');
         }
+    }
+
+    // Any other methods that might use error messages directly
+    private handleApiError(error: any, message: string): void {
+        // Replace with utility function
+        showErrorWithLogsOption(message, error);
     }
 }

@@ -12,6 +12,14 @@ import { AuthenticationError } from './utils/errors';
 import { IndexService } from './services/index-service';
 import { FileWatcherService } from './services/file-watcher-service';
 import { MediaValidationService } from './services/media-validation-service';
+import { 
+    showError, 
+    showErrorWithDetails, 
+    showErrorWithLogsOption, 
+    handleAuthenticationError, 
+    showWorkspaceRequiredError,
+    showActivationError
+} from './utils/ui-helpers';
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize the logger
@@ -47,7 +55,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Function to check workspace availability when the command is executed
         function checkWorkspace(): boolean {
             if (!configService.hasWorkspace()) {
-                vscode.window.showErrorMessage('OnlineSales: This command requires an open workspace. Please open a folder first.');
+                showWorkspaceRequiredError();
                 return false;
             }
             return true;
@@ -76,7 +84,7 @@ export function activate(context: vscode.ExtensionContext) {
                 });
                 
                 if (!domain) {
-                    vscode.window.showErrorMessage('Domain is required to initialize workspace.');
+                    showError('Domain is required to initialize workspace.');
                     return;
                 }
                 
@@ -127,7 +135,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 vscode.window.showInformationMessage('OnlineSales workspace initialized successfully.');
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed to initialize workspace: ${error.message}`);
+                showErrorWithDetails('Failed to initialize workspace', error);
             }
         });
         
@@ -147,7 +155,7 @@ export function activate(context: vscode.ExtensionContext) {
                 });
                 
                 if (!token) {
-                    vscode.window.showErrorMessage('Access token is required for authentication.');
+                    showError('Access token is required for authentication.');
                     return;
                 }
                 
@@ -161,10 +169,10 @@ export function activate(context: vscode.ExtensionContext) {
                 if (isInitialized) {
                     vscode.window.showInformationMessage('Authentication successful.');
                 } else {
-                    vscode.window.showErrorMessage('Failed to authenticate with OnlineSales API.');
+                    showError('Failed to authenticate with OnlineSales API.');
                 }
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Authentication failed: ${error.message}`);
+                showErrorWithDetails('Authentication failed', error);
             }
         });
         
@@ -194,17 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (error: any) {
                 // Special handling for authentication errors
                 if (error instanceof AuthenticationError) {
-                    const action = await vscode.window.showErrorMessage(
-                        'Authentication failed: Your token is invalid or expired.', 
-                        'Re-authenticate',
-                        'View Logs'
-                    );
-                    
-                    if (action === 'Re-authenticate') {
-                        vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
-                    } else if (action === 'View Logs') {
-                        Logger.show();
-                    }
+                    await handleAuthenticationError(error);
                     return;
                 }
                 
@@ -273,7 +271,7 @@ export function activate(context: vscode.ExtensionContext) {
 
                 await contentService.createNewContent(type, title, slug);
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed to create new content: ${error.message}`);
+                showErrorWithDetails('Failed to create new content', error);
             }
         });
         
@@ -288,21 +286,11 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (error: any) {
                 // Special handling for authentication errors
                 if (error instanceof AuthenticationError) {
-                    const action = await vscode.window.showErrorMessage(
-                        'Authentication failed: Your token is invalid or expired.', 
-                        'Re-authenticate',
-                        'View Logs'
-                    );
-                    
-                    if (action === 'Re-authenticate') {
-                        vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
-                    } else if (action === 'View Logs') {
-                        Logger.show();
-                    }
+                    await handleAuthenticationError(error);
                     return;
                 }
                 
-                vscode.window.showErrorMessage(`Failed to push content: ${error.message}`);
+                showErrorWithDetails('Failed to push content', error);
             }
         });
         
@@ -315,7 +303,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 await contentService.showChanges();
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed to show changes: ${error.message}`);
+                showErrorWithDetails('Failed to show changes', error);
             }   
         });
         
@@ -330,7 +318,7 @@ export function activate(context: vscode.ExtensionContext) {
                 await indexService.listIndexedFiles();
                 vscode.window.showInformationMessage('Index contents logged. Check the logs for details.');
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed to list indexed files: ${error.message}`);
+                showErrorWithDetails('Failed to list indexed files', error);
             }
         });
         
@@ -371,7 +359,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 // Check if new file exists
                 if (!(await fs.pathExists(newAbsPath))) {
-                    vscode.window.showErrorMessage(`New file does not exist: ${newPath}`);
+                    showError(`New file does not exist: ${newPath}`);
                     return;
                 }
                 
@@ -381,7 +369,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // Refresh changes view
                 await contentService.showChanges();
             } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed to mark file as renamed: ${error.message}`);
+                showErrorWithDetails('Failed to mark file as renamed', error);
             }
         });
 
@@ -398,7 +386,7 @@ export function activate(context: vscode.ExtensionContext) {
                     );
                 }
             } catch (error) {
-                vscode.window.showErrorMessage(`Error validating media: ${error}`);
+                showErrorWithDetails('Error validating media', error);
             }
         });
         
@@ -437,8 +425,7 @@ export function activate(context: vscode.ExtensionContext) {
         
         Logger.info('OnlineSales CMS extension successfully activated!');
     } catch (error) {
-        Logger.error('Error during extension activation', error);
-        vscode.window.showErrorMessage('Failed to activate OnlineSales CMS extension. See logs for details.');
+        showActivationError(error);
     }
 }
 
