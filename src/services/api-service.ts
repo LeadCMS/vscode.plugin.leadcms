@@ -11,9 +11,9 @@ import {
     handleWorkspaceNotInitializedError
 } from '../utils/ui-helpers';
 
-// New error class for workspace initialization issues
+// The error class for workspace initialization issues
 export class WorkspaceNotInitializedError extends Error {
-    constructor(message: string = 'Workspace not initialized') {
+    constructor(message: string) {
         super(message);
         this.name = 'WorkspaceNotInitializedError';
     }
@@ -37,16 +37,29 @@ export class ApiService {
      */
     public async initialize(): Promise<boolean> {
         try {
+            // First check if workspace is initialized properly
             if (!this.configService.hasWorkspace()) {
+                Logger.warn('No workspace available for API client initialization');
                 return false;
             }
             
-            // Always get fresh config from file
+            // Check if config exists (this verifies workspace initialization)
             const config = await this.configService.getConfig();
+            
+            if (!config || !config.domain) {
+                Logger.warn('No config or domain found in workspace. Workspace may not be fully initialized.');
+                return false;
+            }
+
+            // Now check for token
             const tokenConfig = await this.configService.getToken();
             
-            if (!config || !config.domain || !tokenConfig || !tokenConfig.accessToken) {
-                return false;
+            // If no token, that's okay - we don't return false here to distinguish
+            // between "workspace not initialized" and "not authenticated"
+            if (!tokenConfig || !tokenConfig.accessToken) {
+                Logger.warn('No authentication token found. Will prompt for authentication.');
+                // Return true because workspace is initialized, we just need auth
+                return true; 
             }
 
             const baseURL = `${config.domain}/api`;
@@ -128,13 +141,39 @@ export class ApiService {
     /**
      * Ensure API client is initialized with fresh configuration
      * @throws WorkspaceNotInitializedError if client cannot be initialized
+     * @throws AuthenticationError if workspace is initialized but not authenticated
      */
     private async ensureClientInitialized(): Promise<boolean> {
         // Always reinitialize the client to get fresh config
         const initialized = await this.initialize();
+        
+        // First check if workspace is properly initialized
         if (!initialized) {
-            throw new WorkspaceNotInitializedError('API client not initialized. Please initialize your workspace.');
+            const config = await this.configService.getConfig();
+            if (!config) {
+                Logger.error('Workspace not properly initialized: missing config.json');
+                throw new WorkspaceNotInitializedError('Workspace not initialized. Please initialize your workspace first.');
+            }
+            
+            // If workspace is initialized but we don't have a client,
+            // it's most likely an authentication issue
+            const token = await this.configService.getToken();
+            if (!token || !token.accessToken) {
+                Logger.error('Authentication required: missing or invalid token');
+                throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+            }
+            
+            // If we get here, there's some other initialization problem
+            throw new Error('Failed to initialize API client. Check the logs for details.');
         }
+        
+        // If client is still undefined despite successful initialization,
+        // it's likely an authentication issue
+        if (!this.client) {
+            Logger.error('API client is undefined after successful initialization');
+            throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+        }
+        
         return true;
     }
 
@@ -187,7 +226,16 @@ export class ApiService {
         } catch (error) {
             // Handle workspace initialization errors with a prompt
             if (error instanceof WorkspaceNotInitializedError) {
+                const config = await this.configService.getConfig();
+                if (config) {
+                    // If we have a config file but no token, this is an auth issue
+                    Logger.info('Workspace is initialized but not authenticated, prompting for authentication');
+                    throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+                }
+                
+                // Otherwise it's a real workspace initialization issue
                 await handleWorkspaceNotInitializedError();
+                return [];
             }
             
             // Pass authentication errors to be handled by the caller

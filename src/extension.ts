@@ -12,6 +12,8 @@ import { AuthenticationError } from './utils/errors';
 import { IndexService } from './services/index-service';
 import { FileWatcherService } from './services/file-watcher-service';
 import { MediaValidationService } from './services/media-validation-service';
+import { GatsbyService } from './services/gatsby-service';
+import { PreviewService } from './services/preview-service';
 import { 
     showError, 
     showErrorWithDetails, 
@@ -38,6 +40,10 @@ export function activate(context: vscode.ExtensionContext) {
         const indexService = new IndexService(configService);
         const contentService = new ContentService(apiService, mediaService, indexService);
         const gitService = new GitService(configService);
+        
+        // Initialize new Gatsby and Preview services
+        const gatsbyService = new GatsbyService(configService);
+        const previewService = new PreviewService(gatsbyService);
 
         // Initialize file watcher if workspace exists
         let fileWatcherService: FileWatcherService | undefined;
@@ -45,6 +51,16 @@ export function activate(context: vscode.ExtensionContext) {
             fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
             // Add to disposables
             context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
+            
+            // Ensure .gitignore includes the VS Code settings file
+            configService.ensureGitIgnoreContains('.vscode/settings.json').catch(error => {
+                Logger.warn('Failed to update .gitignore:', error);
+            });
+            
+            // Set up F5 experience
+            gatsbyService.generateLaunchConfig().catch(error => {
+                Logger.warn('Failed to set up F5 experience:', error);
+            });
         }
 
         // Initialize the new media validation service
@@ -96,7 +112,19 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 const config: OnlineSalesConfig = {
                     domain: domain.trim(),
-                    useLocalMediaReferences: useLocalMediaReferences === 'Yes'
+                    useLocalMediaReferences: useLocalMediaReferences === 'Yes',
+                    // Add default preview URL patterns for common content types
+                    previewUrls: {
+                        page: {
+                            urlPattern: '/{slug}'
+                        },
+                        blog: {
+                            urlPattern: '/blog/{slug}'
+                        },
+                        post: {
+                            urlPattern: '/blog/{slug}'
+                        }
+                    }
                 };
                 
                 // Show progress during initialization
@@ -111,18 +139,69 @@ export function activate(context: vscode.ExtensionContext) {
                     await configService.ensureDirectoriesExist();
                     
                     // Step 2: Initialize Git repository
-                    progress.report({ message: 'Initializing Git repository...', increment: 40 });
+                    progress.report({ message: 'Initializing Git repository...', increment: 30 });
                     try {
                         const isGitInitialized = await gitService.initializeRepository();
                         if (isGitInitialized) {
-                            progress.report({ message: 'Git repository initialized', increment: 40 });
+                            progress.report({ message: 'Git repository initialized', increment: 10 });
                         } else {
-                            progress.report({ message: 'Skipped Git initialization', increment: 40 });
+                            progress.report({ message: 'Skipped Git initialization', increment: 10 });
                         }
                     } catch (gitError) {
                         Logger.warn('Git initialization failed:', gitError);
                         vscode.window.showWarningMessage(`Git initialization failed: ${gitError instanceof Error ? gitError.message : 'Unknown error'}. Continuing without Git.`);
-                        progress.report({ message: 'Continuing without Git...', increment: 40 });
+                        progress.report({ message: 'Continuing without Git...', increment: 10 });
+                    }
+                    
+                    // New Step 3: Configure Gatsby path and port
+                    progress.report({ message: 'Configuring Gatsby preview...', increment: 10 });
+                    
+                    const configureGatsby = await vscode.window.showQuickPick(['Yes', 'No'], {
+                        placeHolder: 'Do you want to configure Gatsby for content preview?',
+                        canPickMany: false
+                    });
+                    
+                    if (configureGatsby === 'Yes') {
+                        vscode.window.showInformationMessage(
+                            'Please select the path to your Gatsby site for content preview.'
+                        );
+                        
+                        const gatsbyPath = await gatsbyService.promptForGatsbyPath();
+                        if (gatsbyPath) {
+                            try {
+                                await configService.saveGatsbyPath(gatsbyPath);
+                                progress.report({ message: 'Gatsby path configured', increment: 10 });
+                                
+                                // Add port configuration
+                                const useCustomPort = await vscode.window.showQuickPick(['Yes', 'No'], {
+                                    placeHolder: 'Do you want to use a custom port for Gatsby? (Default is 8000)',
+                                    canPickMany: false
+                                });
+                                
+                                if (useCustomPort === 'Yes') {
+                                    const port = await gatsbyService.promptForPort();
+                                    if (port) {
+                                        await gatsbyService.configurePort(port);
+                                        progress.report({ message: `Gatsby port set to ${port}`, increment: 5 });
+                                    }
+                                }
+                                
+                                // Configure F5 experience
+                                progress.report({ message: 'Setting up F5 debugging...', increment: 5 });
+                                await gatsbyService.generateLaunchConfig();
+                                progress.report({ message: 'F5 debugging configured', increment: 10 });
+                            } catch (error) {
+                                Logger.warn('Failed to save Gatsby configuration:', error);
+                                vscode.window.showWarningMessage('Failed to save Gatsby configuration. You can configure it later using the Preview command.');
+                                progress.report({ message: 'Continuing without Gatsby configuration', increment: 30 });
+                            }
+                        } else {
+                            Logger.info('User skipped Gatsby path configuration');
+                            progress.report({ message: 'Skipped Gatsby configuration', increment: 30 });
+                        }
+                    } else {
+                        Logger.info('User chose not to configure Gatsby');
+                        progress.report({ message: 'Skipped Gatsby configuration', increment: 30 });
                     }
                 });
                 
@@ -180,6 +259,31 @@ export function activate(context: vscode.ExtensionContext) {
         const pullContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.pullContent', async () => {
             try {
                 if (!checkWorkspace()) {
+                    return;
+                }
+
+                // Check if workspace is initialized properly
+                const config = await configService.getConfig();
+                if (!config) {
+                    vscode.window.showErrorMessage(
+                        'Workspace is not initialized. Please run "Initialize Workspace" command first.'
+                    );
+                    return;
+                }
+
+                // Check if token exists and prompt if not
+                const token = await configService.getToken();
+                if (!token || !token.accessToken) {
+                    const response = await vscode.window.showErrorMessage(
+                        'Authentication required. You need to set your access token.',
+                        'Authenticate Now'
+                    );
+                    
+                    if (response === 'Authenticate Now') {
+                        // Call the authenticate command
+                        await vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
+                        return;
+                    }
                     return;
                 }
                 
@@ -389,7 +493,73 @@ export function activate(context: vscode.ExtensionContext) {
                 showErrorWithDetails('Error validating media', error);
             }
         });
+
+        // Command: Preview MDX
+        const previewMdxCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.previewMDX', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                await previewService.previewMDX();
+            } catch (error: any) {
+                showErrorWithDetails('Failed to preview MDX', error);
+            }
+        });
         
+        // Add a new command to open preview in browser
+        const previewInBrowserCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.previewInBrowser', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                const editor = vscode.window.activeTextEditor;
+                if (!editor || !editor.document.fileName.toLowerCase().endsWith('.mdx')) {
+                    vscode.window.showErrorMessage('Please open an MDX file first.');
+                    return;
+                }
+                
+                // Ensure server is running
+                const isServerRunning = await gatsbyService.ensureGatsbyServerRunning();
+                if (!isServerRunning) {
+                    vscode.window.showErrorMessage('Failed to start Gatsby development server.');
+                    return;
+                }
+                
+                // Generate preview URL
+                const previewUrl = await gatsbyService.generatePreviewUrl(editor.document.uri.fsPath);
+                if (!previewUrl) {
+                    vscode.window.showErrorMessage('Failed to generate preview URL.');
+                    return;
+                }
+                
+                // Open in browser
+                await gatsbyService.openInBrowser(previewUrl);
+            } catch (error: any) {
+                showErrorWithDetails('Failed to preview in browser', error);
+            }
+        });
+
+        // Add a new command to toggle auto-preview mode
+        const toggleAutoPreviewCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.toggleAutoPreview', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                const isEnabled = await previewService.toggleAutoPreview();
+                
+                if (isEnabled) {
+                    vscode.window.showInformationMessage('Auto-preview enabled. Preview will update as you switch between MDX files.');
+                } else {
+                    vscode.window.showInformationMessage('Auto-preview disabled.');
+                }
+            } catch (error: any) {
+                showErrorWithDetails('Failed to toggle auto-preview', error);
+            }
+        });
+
         // Add file change listener for auto-validation
         const fileWatcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(configService.getWorkspacePath(), '{content/**/*.mdx,content/**/*.json}')
@@ -405,6 +575,26 @@ export function activate(context: vscode.ExtensionContext) {
         
         context.subscriptions.push(fileWatcher);
         
+        // Add a new command to reconfigure Gatsby port
+        const configureGatsbyPortCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.configureGatsbyPort', async () => {
+            try {
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                const port = await gatsbyService.promptForPort();
+                if (port) {
+                    await gatsbyService.configurePort(port);
+                    vscode.window.showInformationMessage(`Gatsby port configured to ${port}`);
+                    
+                    // Regenerate the launch configuration with the new port
+                    await gatsbyService.generateLaunchConfig();
+                }
+            } catch (error: any) {
+                showErrorWithDetails('Failed to configure Gatsby port', error);
+            }
+        });
+
         // Register all commands
         Logger.info('Pushing commands to subscriptions...');
         context.subscriptions.push(showLogsCommand);
@@ -417,6 +607,13 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(debugIndexCommand);
         context.subscriptions.push(markRenamedCommand);
         context.subscriptions.push(validateMediaCommand);
+        context.subscriptions.push(previewMdxCommand);
+        context.subscriptions.push(configureGatsbyPortCommand); // Add this line
+        context.subscriptions.push(previewInBrowserCommand);
+        context.subscriptions.push(toggleAutoPreviewCommand);
+        
+        // Add previewService to subscriptions for proper disposal
+        context.subscriptions.push({ dispose: () => previewService.dispose() });
 
         // Only show the ready notification if we have a workspace
         if (configService.hasWorkspace()) {
