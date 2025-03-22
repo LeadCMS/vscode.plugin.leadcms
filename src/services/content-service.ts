@@ -290,7 +290,7 @@ export class ContentService {
                     
                     try {
                         const metadataContent = await fs.readFile(jsonPath, 'utf8');
-                        const metadata = JSON.parse(metadataContent);
+                        let metadata = JSON.parse(metadataContent);
                         
                         // Add the slug from the folder name
                         metadata.slug = slug;
@@ -300,6 +300,9 @@ export class ContentService {
                         
                         // Replace local media references with API URLs
                         bodyContent = await this.mediaService.convertLocalMediaToApiRefs(bodyContent, type, slug);
+                        
+                        // Also convert metadata coverImageUrl to API URL
+                        metadata = this.mediaService.convertMetadataMediaToApiRefs(metadata, slug);
                         
                         if (metadata.id) {
                             // Update existing content

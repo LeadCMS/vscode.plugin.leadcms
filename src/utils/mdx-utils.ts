@@ -49,45 +49,21 @@ export function replaceMediaReferencesInMetadata(
     }
     
     // Create a copy to avoid mutating the original
-    const result = Array.isArray(metadata) ? [...metadata] : {...metadata};
+    const result = {...metadata};
     
-    // Helper function to recursively process objects
-    const processObject = (obj: any): any => {
-        if (!obj || typeof obj !== 'object') {
-            return obj;
-        }
-        
-        // Handle arrays
-        if (Array.isArray(obj)) {
-            return obj.map(item => processObject(item));
-        }
-        
-        // Handle regular objects
-        const newObj = {...obj};
-        for (const [key, value] of Object.entries(obj)) {
-            if (typeof value === 'string' && 
-                (key === 'coverImageUrl' || key.includes('Url') || key.includes('Image'))) {
-                
-                // Try to replace the URL if it exists in the map
-                for (const [remoteUrl, localPath] of mediaMap.entries()) {
-                    if (value.includes(remoteUrl)) {
-                        // Get just the filename
-                        const filename = path.basename(localPath);
-                        newObj[key] = value.replace(remoteUrl, filename);
-                        break;
-                    }
-                }
-            } 
-            else if (value && typeof value === 'object') {
-                // Recursively process nested objects
-                newObj[key] = processObject(value);
+    // Only process coverImageUrl for now
+    if (result.coverImageUrl && typeof result.coverImageUrl === 'string') {
+        for (const [remoteUrl, localPath] of mediaMap.entries()) {
+            if (result.coverImageUrl.includes(remoteUrl)) {
+                // Get just the filename
+                const filename = path.basename(localPath);
+                result.coverImageUrl = filename;
+                break;
             }
         }
-        
-        return newObj;
-    };
+    }
     
-    return processObject(result);
+    return result;
 }
 
 /**

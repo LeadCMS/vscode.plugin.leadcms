@@ -467,7 +467,7 @@ export class MediaService {
                 const fileName = path.basename(filePath);
                 
                 // Create API URL
-                const apiUrl = `/api/media/${contentType}/${slug}/${fileName}`;
+                const apiUrl = `/api/media/${slug}/${fileName}`;
                 
                 // Replace the file path with API URL
                 if (match.startsWith('![')) {
@@ -481,6 +481,37 @@ export class MediaService {
         }
         
         return updatedContent;
+    }
+
+    /**
+     * Convert local media references in metadata back to API URLs
+     * @param metadata The metadata object
+     * @param contentType The content type for URL construction
+     * @param slug The content slug for URL construction
+     * @returns Updated metadata with API URLs
+     */
+    public convertMetadataMediaToApiRefs(
+        metadata: any,
+        slug: string
+    ): any {
+        if (!metadata || typeof metadata !== 'object') {
+            return metadata;
+        }
+        
+        // Create a copy to avoid mutating the original
+        const result = {...metadata};
+        
+        // Only process coverImageUrl
+        if (result.coverImageUrl && typeof result.coverImageUrl === 'string') {
+            // Skip if it's already an API URL
+            if (!result.coverImageUrl.includes('/api/media/')) {
+                // It's a local filename, convert it to API URL
+                const filename = path.basename(result.coverImageUrl);
+                result.coverImageUrl = `/api/media/${slug}/${filename}`;
+            }
+        }
+        
+        return result;
     }
 
     /**
