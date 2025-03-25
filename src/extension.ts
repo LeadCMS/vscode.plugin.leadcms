@@ -118,11 +118,11 @@ export function activate(context: vscode.ExtensionContext) {
                         page: {
                             urlPattern: '/{slug}'
                         },
-                        blog: {
-                            urlPattern: '/blog/{slug}'
-                        },
                         post: {
                             urlPattern: '/blog/{slug}'
+                        },
+                        release: {
+                            urlPattern: '/releases/{slug}'
                         }
                     }
                 };

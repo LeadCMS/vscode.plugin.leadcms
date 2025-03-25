@@ -485,7 +485,7 @@ export class GatsbyService {
                         type: 'chrome',
                         request: 'launch',
                         name: 'Launch Gatsby Preview',
-                        url: `http://localhost:${this.port}`,
+                        url: `http://localhost:{config:onlinesalesCms.gatsbyPort}`,
                         webRoot: '${workspaceFolder}',
                         preLaunchTask: 'start-gatsby-server'
                     }
