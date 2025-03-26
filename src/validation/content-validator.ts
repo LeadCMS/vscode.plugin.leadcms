@@ -135,7 +135,7 @@ export class ContentValidator implements Validator {
      * Validate that required fields are present
      */
     private validateRequiredFields(metadata: any, filePath: string, problems: ValidationProblem[]): void {
-        const requiredFields = ['title', 'type'];
+        const requiredFields = ['title', 'author', 'description', 'language'];
         
         for (const field of requiredFields) {
             if (!metadata[field]) {

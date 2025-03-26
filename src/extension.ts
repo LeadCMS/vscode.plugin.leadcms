@@ -22,6 +22,9 @@ import {
 } from './utils/ui-helpers';
 import { ValidationService } from './validation/validation-service';
 
+// Keep track of service instances for proper disposal
+let indexService: IndexService | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
     // Initialize the logger
     Logger.init();
@@ -34,9 +37,9 @@ export function activate(context: vscode.ExtensionContext) {
         // Add configService to context.subscriptions for proper disposal
         context.subscriptions.push({ dispose: () => configService.dispose() });
         
+        indexService = new IndexService(configService);
         const apiService = new ApiService(configService);
         const mediaService = new MediaService(apiService);
-        const indexService = new IndexService(configService);
         const contentService = new ContentService(apiService, mediaService, indexService);
         const gitService = new GitService(configService);
         
@@ -46,7 +49,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Initialize file watcher if workspace exists
         let fileWatcherService: FileWatcherService | undefined;
-        if (configService.hasWorkspace()) {
+        if (configService.hasWorkspace() && indexService) {
             fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
             // Add to disposables
             context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
@@ -198,7 +201,7 @@ export function activate(context: vscode.ExtensionContext) {
                 });
                 
                 // Initialize file watcher for the newly set up workspace
-                if (!fileWatcherService) {
+                if (!fileWatcherService && indexService) {
                     fileWatcherService = new FileWatcherService(indexService, configService.getWorkspacePath());
                     // Add to disposables
                     context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
@@ -556,5 +559,11 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+    // Properly dispose of services
+    if (indexService) {
+        indexService.dispose();
+        indexService = undefined;
+    }
+    
     Logger.info('OnlineSales CMS extension deactivated');
 }

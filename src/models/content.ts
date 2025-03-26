@@ -8,6 +8,7 @@ export interface ContentDetailsDto {
     author: string;
     language: string;
     tags: string[];
+    comments?: any[];
     category: string;
     coverImageUrl?: string;
     coverImageAlt?: string;
@@ -26,6 +27,7 @@ export interface ContentCreateDto {
     author: string;
     language: string;
     tags?: string[];
+    comments?: any[];
     category?: string;
     coverImageUrl?: string;
     coverImageAlt?: string;
@@ -39,9 +41,11 @@ export interface ContentUpdateDto {
     description?: string;
     body?: string;
     slug?: string;
+    type: string;
     author?: string;
     language?: string;
     tags?: string[];
+    comments?: any[];
     category?: string;
     coverImageUrl?: string;
     coverImageAlt?: string;

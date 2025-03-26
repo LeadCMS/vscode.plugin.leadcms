@@ -16,6 +16,8 @@ export class IndexService {
     private indexFilePath: string | undefined;
     private index: ContentIndex | undefined;
     private configService: ConfigService;
+    private indexFileWatcher: vscode.FileSystemWatcher | undefined;
+    private isInternalSave: boolean = false; // Flag to track our own writes
     
     constructor(configService: ConfigService) {
         this.configService = configService;
@@ -27,6 +29,63 @@ export class IndexService {
         if (workspaceFolders && workspaceFolders.length > 0) {
             this.workspacePath = workspaceFolders[0].uri.fsPath;
             this.indexFilePath = path.join(this.workspacePath, '.onlinesales', 'content-index.json');
+            
+            // Set up file watcher for the index file
+            this.setupIndexFileWatcher();
+        }
+    }
+
+    private setupIndexFileWatcher(): void {
+        if (!this.indexFilePath) {
+            return;
+        }
+        
+        try {
+            // Create a file system watcher for the index file
+            const indexFilePattern = new vscode.RelativePattern(
+                path.dirname(this.indexFilePath),
+                path.basename(this.indexFilePath)
+            );
+            
+            this.indexFileWatcher = vscode.workspace.createFileSystemWatcher(indexFilePattern);
+            
+            // Watch for changes to the index file
+            this.indexFileWatcher.onDidChange(async (uri) => {
+                if (this.isInternalSave) {
+                    // This change was caused by our own saveIndex call
+                    this.isInternalSave = false;
+                    return;
+                }
+                
+                Logger.info('Index file changed externally, reloading...');
+                await this.reloadIndex();
+            });
+            
+            // Watch for creation of the index file (in case it was deleted and recreated)
+            this.indexFileWatcher.onDidCreate(async (uri) => {
+                if (!this.isInternalSave) {
+                    Logger.info('Index file created externally, reloading...');
+                    await this.reloadIndex();
+                }
+            });
+            
+            Logger.info('Index file watcher set up successfully');
+        } catch (error) {
+            Logger.error('Failed to set up index file watcher:', error);
+        }
+    }
+
+    private async reloadIndex(): Promise<void> {
+        if (!this.indexFilePath || !await fs.pathExists(this.indexFilePath)) {
+            return;
+        }
+        
+        try {
+            const indexData = await fs.readFile(this.indexFilePath, 'utf8');
+            this.index = JSON.parse(indexData) as ContentIndex;
+            Logger.info(`Reloaded index from file with ${Object.keys(this.index.entries).length} entries`);
+        } catch (error) {
+            Logger.error('Failed to reload index from file:', error);
         }
     }
 
@@ -104,6 +163,9 @@ export class IndexService {
         }
         
         try {
+            // Set flag to ignore our own file changes
+            this.isInternalSave = true;
+            
             // Ensure directory exists
             await fs.ensureDir(path.dirname(this.indexFilePath!));
             
@@ -122,6 +184,7 @@ export class IndexService {
             
             Logger.info('Content index saved successfully');
         } catch (error) {
+            this.isInternalSave = false; // Reset flag in case of error
             Logger.error('Failed to save content index:', error);
             throw new Error('Failed to save content index');
         }
@@ -271,7 +334,8 @@ export class IndexService {
                 lastSyncedAt: existingEntry && existingEntry.hash === mediaHash
                     ? existingEntry.lastSyncedAt || now  // Keep existing timestamp if hash unchanged
                     : now,                               // Update timestamp if hash changed or new entry
-                status: FileStatus.SYNCED
+                status: FileStatus.SYNCED,
+                lastModifiedLocal: undefined // Clear local modification timestamp when synced
             };
             
             await this.saveIndex();
@@ -675,6 +739,14 @@ export class IndexService {
             }
             mdxEntry.lastModifiedRemote = updatedAt;
             mdxEntry.status = FileStatus.SYNCED;
+            mdxEntry.lastModifiedLocal = undefined; // Always clear local modification timestamp when synced
+            
+            // Clear rename history when status changes to SYNCED
+            if (mdxEntry.originalPath || mdxEntry.originalState) {
+                Logger.info(`Clearing rename history for synced file: ${mdxRelPath}`);
+                mdxEntry.originalPath = undefined;
+                mdxEntry.originalState = undefined;
+            }
         } else {
             // Create new entry
             this.index!.entries[mdxRelPath] = {
@@ -700,6 +772,15 @@ export class IndexService {
             }
             metaEntry.lastModifiedRemote = updatedAt;
             metaEntry.status = FileStatus.SYNCED;
+            metaEntry.lastModifiedLocal = undefined; // Always clear local modification timestamp when synced
+            
+            // Clear rename history when status changes to SYNCED
+            if (metaEntry.originalPath || metaEntry.originalState) {
+                Logger.info(`Clearing rename history for synced file: ${metaRelPath}`);
+                metaEntry.originalPath = undefined;
+                metaEntry.originalState = undefined;
+                mdxEntry.lastModifiedLocal = undefined;
+            }
         } else {
             // Create new entry
             this.index!.entries[metaRelPath] = {
@@ -816,8 +897,16 @@ export class IndexService {
             return;
         }
         
-        // Check if this is a rename back to the original path
-        if (entry.originalPath === newRelPath || (entry.originalState && entry.originalState.localPath === newRelPath)) {
+        // Extract content info to compare content type and slug
+        const oldContentInfo = this.extractContentInfoFromPath(oldPath);
+        const newContentInfo = this.extractContentInfoFromPath(newPath);
+        
+        // Only consider it a "rename back to original" if the full path matches exactly,
+        // not just if the content type and slug are the same
+        const isRenameBackToOriginal = entry.originalPath === newRelPath || 
+            (entry.originalState && entry.originalState.localPath === newRelPath);
+        
+        if (isRenameBackToOriginal) {
             Logger.info(`File renamed back to original path: ${newRelPath}`);
             
             // Restore original state if available
@@ -837,6 +926,9 @@ export class IndexService {
                     originalPath: undefined // Clear originalPath since it's no longer renamed
                 };
             }
+            
+            // Update related entries to reference the new path
+            this.updateRelatedReferencesAfterRename(oldRelPath, newRelPath);
             
             // Delete the old entry
             delete this.index!.entries[oldRelPath];
@@ -862,10 +954,69 @@ export class IndexService {
             lastModifiedLocal: new Date().toISOString()
         };
         
+        // Update related entries to reference the new path
+        this.updateRelatedReferencesAfterRename(oldRelPath, newRelPath);
+        
         // Delete the old entry
         delete this.index!.entries[oldRelPath];
         
         await this.saveIndex();
+    }
+
+    /**
+     * Updates relatedEntryIds in all related entries after a file rename
+     * @param oldPath The original path before renaming
+     * @param newPath The new path after renaming
+     */
+    private updateRelatedReferencesAfterRename(oldPath: string, newPath: string): void {
+        if (!this.index) {
+            throw new Error('Index not loaded');
+        }
+
+        const entries = this.index.entries;
+        const oldRelPath = path.isAbsolute(oldPath) ? this.toRelativePath(oldPath) : oldPath;
+        const newRelPath = path.isAbsolute(newPath) ? this.toRelativePath(newPath) : newPath;
+        
+        // Find all entries that have a reference to the old path
+        for (const [entryPath, entry] of Object.entries(entries)) {
+            if (entryPath === newRelPath) {
+                continue; // Skip the renamed entry itself
+            }
+            
+            if (entry.relatedEntryIds && entry.relatedEntryIds.includes(oldRelPath)) {
+                // Replace the old path with the new path
+                entry.relatedEntryIds = entry.relatedEntryIds.map(id => 
+                    id === oldRelPath ? newRelPath : id
+                );
+                Logger.info(`Updated reference in ${entryPath} from ${oldRelPath} to ${newRelPath}`);
+            }
+        }
+        
+        // Ensure the renamed entry has correct references too
+        const renamedEntry = entries[newRelPath];
+        if (renamedEntry && renamedEntry.relatedEntryIds) {
+            // Look for any paths in the renamed file's related entries that might also need updating
+            for (let i = 0; i < renamedEntry.relatedEntryIds.length; i++) {
+                const relatedPath: string = renamedEntry.relatedEntryIds[i];
+                
+                // If the related entry has old folder name but should have new folder name
+                if (relatedPath.includes(path.dirname(oldRelPath)) && 
+                    !path.dirname(oldRelPath).endsWith(path.dirname(newRelPath))) {
+                    
+                    // Calculate what the new path should be
+                    const updatedPath = relatedPath.replace(
+                        path.dirname(oldRelPath), 
+                        path.dirname(newRelPath)
+                    );
+                    
+                    // Fix the reference if the target file exists in the index
+                    if (entries[updatedPath]) {
+                        renamedEntry.relatedEntryIds[i] = updatedPath;
+                        Logger.info(`Fixed incorrect reference in ${newRelPath} from ${relatedPath} to ${updatedPath}`);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -963,28 +1114,49 @@ export class IndexService {
      * @param folderPath The relative folder path to search in
      * @returns Array of index entries in the folder
      */
-    public findEntriesInFolder(folderPath: string): IndexEntry[] {
+    public async findEntriesInFolder(folderPath: string): Promise<IndexEntry[]> {
         this.ensureWorkspaceExists();
         
-        if (!this.index) {
-            Logger.warn('Index not loaded when searching for entries in folder');
+        try {
+            if (!this.index) {
+                Logger.info('Loading index before searching for entries in folder');
+                await this.loadIndex();
+            }
+            
+            // Add an additional safety check to make TypeScript happy
+            if (!this.index) {
+                Logger.error('Failed to load index when searching for entries in folder');
+                return [];
+            }
+            
+            const normalizedFolderPath = folderPath.endsWith(path.sep) 
+                ? folderPath
+                : folderPath + path.sep;
+            
+            const result: IndexEntry[] = [];
+            
+            // Find all entries where the path starts with the folder path
+            for (const [entryPath, entry] of Object.entries(this.index.entries)) {
+                if (entryPath.startsWith(normalizedFolderPath) || entryPath === folderPath) {
+                    result.push(entry);
+                }
+            }
+            
+            Logger.info(`Found ${result.length} index entries in folder: ${folderPath}`);
+            return result;
+        } catch (error) {
+            Logger.error(`Error finding entries in folder ${folderPath}:`, error);
             return [];
         }
-        
-        const normalizedFolderPath = folderPath.endsWith(path.sep) 
-            ? folderPath
-            : folderPath + path.sep;
-        
-        const result: IndexEntry[] = [];
-        
-        // Find all entries where the path starts with the folder path
-        for (const [entryPath, entry] of Object.entries(this.index.entries)) {
-            if (entryPath.startsWith(normalizedFolderPath) || entryPath === folderPath) {
-                result.push(entry);
-            }
+    }
+
+    /**
+     * Cleanup resources used by this service
+     */
+    public dispose(): void {
+        if (this.indexFileWatcher) {
+            this.indexFileWatcher.dispose();
+            this.indexFileWatcher = undefined;
         }
-        
-        Logger.info(`Found ${result.length} index entries in folder: ${folderPath}`);
-        return result;
     }
 }

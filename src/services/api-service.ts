@@ -451,7 +451,16 @@ export class ApiService {
             // Ensure fresh client with latest config
             await this.ensureClientInitialized();
 
-            await this.client!.delete(`/content/${id}`);
+            Logger.info(`Deleting content with ID: ${id}`);
+            
+            // Try to delete with specific accept header to avoid 406 errors
+            await this.client!.delete(`/content/${id}`, {
+                headers: {
+                    'Accept': '*/*'  // Accept any content type as response
+                }
+            });
+            
+            Logger.info(`Successfully deleted content with ID: ${id}`);
         } catch (error: any) {
             if (error instanceof WorkspaceNotInitializedError) {
                 await handleWorkspaceNotInitializedError();
@@ -462,6 +471,14 @@ export class ApiService {
                 Logger.error('Authentication failed (401 Unauthorized)', error);
                 throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
             }
+            
+            // For 406 errors, log but don't throw - this allows content rename operations to continue
+            if (axios.isAxiosError(error) && error.response?.status === 406) {
+                Logger.warn(`Server returned 406 Not Acceptable when deleting content ID ${id}. This may be expected for certain content types.`);
+                // Don't throw the error, allowing the process to continue
+                return;
+            }
+            
             Logger.error(`Failed to delete content with ID ${id}:`, error);
             showErrorWithDetails('Failed to delete content', error);
             throw new Error(`Failed to delete content with ID ${id}`);
@@ -481,7 +498,7 @@ export class ApiService {
             
             // The API expects the path to be URL encoded
             const encodedPath = encodeURIComponent(mediaPath);
-            await this.client!.delete(`/api/media/${encodedPath}`);
+            await this.client!.delete(`/media/${encodedPath}`);
             
             Logger.info(`Successfully deleted media file: ${mediaPath}`);
         } catch (error: any) {

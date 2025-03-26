@@ -218,13 +218,13 @@ export class ContentService {
             const mdxPath = path.join(contentFolder, 'index.mdx');
             await fs.writeFile(mdxPath, content.body || '', 'utf8');
             
-            // Save metadata to index.json file, excluding the slug as it's part of the folder structure
+            // Save metadata to index.json file, excluding unnecessary fields
             const metadataPath = path.join(contentFolder, 'index.json');
             
-            // Create a new object without the body and slug properties
-            const { body, slug, ...metadataWithoutBodyAndSlug } = content;
+            // Create a new object without unnecessary properties
+            const { body, slug, type, createdAt, comments, updatedAt, ...cleanMetadata } = content;
             
-            await fs.writeFile(metadataPath, JSON.stringify(metadataWithoutBodyAndSlug, null, 2), 'utf8');
+            await fs.writeFile(metadataPath, JSON.stringify(cleanMetadata, null, 2), 'utf8');
             
             return { mdxPath, metadataPath };
         } catch (error) {
@@ -391,15 +391,23 @@ export class ContentService {
                 }
                 
                 try {
-                    const fromEntry = this.indexService.getEntryByPath(rename.from);
-                    if (!fromEntry) {
-                        Logger.warn(`Cannot find original entry for renamed file: ${rename.from}`);
+                    // Instead of looking up by the old path which no longer exists in the index,
+                    // look up by the new path, which contains information about the original state
+                    const newEntry = this.indexService.getEntryByPath(rename.to);
+                    if (!newEntry) {
+                        Logger.warn(`Cannot find renamed entry at new location: ${rename.to}`);
+                        continue;
+                    }
+                    
+                    // Make sure it's actually a renamed file
+                    if (newEntry.status !== FileStatus.RENAMED) {
+                        Logger.warn(`Entry at ${rename.to} is not marked as renamed, status: ${newEntry.status}`);
                         continue;
                     }
 
                     // Handle renamed media files
-                    if (fromEntry.fileType === FileType.MEDIA) {
-                        // Get the entry at the new location
+                    if (newEntry.fileType === FileType.MEDIA) {
+                        // Get the file at the new location
                         const toRelPath = rename.to;
                         const fullPath = path.join(this.workspacePath!, toRelPath);
                         
@@ -457,9 +465,9 @@ export class ContentService {
                         processedRenames.set(rename.from, true);
                     }
                     // Handle renamed content folder (slug change)
-                    else if (fromEntry.fileType === FileType.CONTENT || fromEntry.fileType === FileType.METADATA) {
+                    else if (newEntry.fileType === FileType.CONTENT || newEntry.fileType === FileType.METADATA) {
                         // Only process content file - metadata will be handled together with content
-                        if (fromEntry.fileType === FileType.CONTENT) {
+                        if (newEntry.fileType === FileType.CONTENT) {
                             // Check if we need to process a folder rename (slug change)
                             const fromPathParts = rename.from.split(path.sep);
                             const toPathParts = rename.to.split(path.sep);
@@ -477,16 +485,96 @@ export class ContentService {
                                 
                                 // If content type or slug changed, handle as a slug/folder rename
                                 if (fromContentType !== toContentType || fromSlug !== toSlug) {
-                                    // If this is a content file (index.mdx), we need to delete old content and create new
+                                    // If this is a content file (index.mdx), we need to update the content with the new slug
                                     // Check if we have the content ID
-                                    if (fromEntry.id) {
+                                    if (newEntry.id) {
                                         try {
-                                            // Delete the old content
-                                            await this.apiService.deleteContent(fromEntry.id);
-                                            Logger.info(`Deleted old content with ID: ${fromEntry.id} due to slug change`);
-                                            deletedCount++;
+                                            // Get the new content from the new location
+                                            const newPath = path.join(this.workspacePath!, rename.to);
+                                            const newFolder = path.dirname(newPath);
+                                            const jsonPath = path.join(newFolder, 'index.json');
+                                            
+                                            // Skip if JSON file doesn't exist at new location
+                                            if (!await fs.pathExists(jsonPath)) {
+                                                Logger.warn(`JSON file doesn't exist at new location: ${jsonPath}`);
+                                                continue;
+                                            }
+                                            
+                                            // Read content and metadata
+                                            const mdxContent = await fs.readFile(newPath, 'utf8');
+                                            const metadataContent = await fs.readFile(jsonPath, 'utf8');
+                                            let metadata = JSON.parse(metadataContent);
+                                            
+                                            // Add the slug and type from the folder structure
+                                            metadata.slug = toSlug;
+                                            metadata.type = toContentType;
+                                            
+                                            // Process MDX content to convert local media references back to API URLs
+                                            const bodyContent = await this.mediaService.convertLocalMediaToApiRefs(mdxContent, toContentType, toSlug);
+                                            
+                                            // Also convert metadata media references to API URLs
+                                            metadata = this.mediaService.convertMetadataMediaToApiRefs(metadata, toContentType, toSlug);
+                                            
+                                            // Update existing content
+                                            const updateDto: ContentUpdateDto = {
+                                                title: metadata.title,
+                                                description: metadata.description,
+                                                body: bodyContent,
+                                                slug: toSlug,
+                                                type: toContentType,
+                                                author: metadata.author || '',
+                                                language: metadata.language || 'en',
+                                                tags: metadata.tags || [],
+                                                category: metadata.category || '',
+                                                coverImageUrl: metadata.coverImageUrl || '',
+                                                coverImageAlt: metadata.coverImageAlt || '',
+                                                allowComments: metadata.allowComments === undefined ? true : metadata.allowComments,
+                                                source: metadata.source || '',
+                                                publishedAt: metadata.publishedAt || new Date().toISOString()
+                                            };
+                                            
+                                            Logger.info(`Updating existing content with ID ${newEntry.id} for renamed content: ${rename.from} -> ${rename.to}`);
+                                            const updatedContent = await this.apiService.updateContent(newEntry.id, updateDto);
+                                            
+                                            // Update the local metadata
+                                            metadata.id = updatedContent.id;
+                                            metadata.updatedAt = updatedContent.updatedAt;
+                                            
+                                            // Remove unnecessary properties that shouldn't be stored locally
+                                            delete metadata.slug;
+                                            delete metadata.type;
+                                            delete metadata.createdAt;
+                                            delete metadata.updatedAt;
+                                            delete metadata.comments;
 
-                                            // Get the content info from new path
+                                            await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+                                            
+                                            // Update the index with the updated content
+                                            await this.indexService.updateAfterPush(
+                                                updatedContent.id,
+                                                newPath,
+                                                jsonPath,
+                                                updatedContent.updatedAt
+                                            );
+                                            
+                                            updatedCount++;
+                                            renamedCount++;
+                                            Logger.info(`Updated content after folder rename: ${rename.from} -> ${rename.to}`);
+                                        } catch (error) {
+                                            if (error instanceof AuthenticationError) {
+                                                await handleAuthenticationError(error);
+                                                return;
+                                            }
+                                            Logger.error(`Failed to process renamed content: ${rename.from} -> ${rename.to}`, error);
+                                            errorCount++;
+                                        }
+                                    } else {
+                                        // If content doesn't have an ID yet, use the original delete and create approach
+                                        try {
+                                            // Delete the old content - we don't have ID so this will be skipped
+                                            // and we'll just create new content
+                                            
+                                            // Get the new content from the new location
                                             const newPath = path.join(this.workspacePath!, rename.to);
                                             const newFolder = path.dirname(newPath);
                                             const jsonPath = path.join(newFolder, 'index.json');
@@ -535,13 +623,14 @@ export class ContentService {
                                             
                                             // Update the local metadata with the new ID
                                             metadata.id = newContent.id;
-                                            metadata.createdAt = newContent.createdAt;
-                                            metadata.updatedAt = newContent.updatedAt;
                                             
-                                            // Remove slug and type as they're part of the folder structure
+                                            // Don't save unnecessary server timestamps locally
                                             delete metadata.slug;
                                             delete metadata.type;
-                                            
+                                            delete metadata.createdAt;
+                                            delete metadata.updatedAt;
+                                            delete metadata.comments;
+
                                             await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
                                             
                                             // Update the index with the new content
@@ -551,17 +640,6 @@ export class ContentService {
                                                 jsonPath,
                                                 newContent.updatedAt
                                             );
-                                            
-                                            // Also mark the json file rename as processed
-                                            const jsonRename = changes.renamed.find(r => 
-                                                r.from.endsWith('index.json') && 
-                                                r.from.startsWith(fromPathParts.slice(0, 3).join(path.sep)) &&
-                                                r.to.startsWith(toPathParts.slice(0, 3).join(path.sep))
-                                            );
-                                            
-                                            if (jsonRename) {
-                                                processedRenames.set(jsonRename.from, true);
-                                            }
                                             
                                             createdCount++;
                                             renamedCount++;
@@ -762,6 +840,7 @@ export class ContentService {
                                     description: metadata.description,
                                     body: bodyContent,
                                     slug: slug,
+                                    type: type,
                                     author: metadata.author || '',
                                     language: metadata.language || 'en',
                                     tags: metadata.tags || [],
@@ -782,6 +861,17 @@ export class ContentService {
                                     jsonPath,
                                     updatedContent.updatedAt
                                 );
+                                
+                                // Update the local metadata with the new state
+                                metadata.id = updatedContent.id;
+                                // Remove server timestamps that aren't needed locally
+                                delete metadata.slug;
+                                delete metadata.type;
+                                delete metadata.createdAt;
+                                delete metadata.updatedAt;
+                                delete metadata.comments;
+
+                                await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
                                 
                                 updatedCount++;
                             } catch (updateError) {
@@ -834,13 +924,14 @@ export class ContentService {
                                 
                                 // Update the local metadata with the new ID
                                 metadata.id = newContent.id;
-                                metadata.createdAt = newContent.createdAt;
-                                metadata.updatedAt = newContent.updatedAt;
                                 
-                                // Remove slug as it's part of the folder structure
+                                // Don't save server timestamps locally
                                 delete metadata.slug;
                                 delete metadata.type;
-                                
+                                delete metadata.createdAt;
+                                delete metadata.updatedAt;
+                                delete metadata.comments;
+
                                 await fs.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
                                 
                                 // Update the index with the new content

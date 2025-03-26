@@ -386,7 +386,7 @@ export class FileWatcherService {
                 Logger.info(`Content folder renamed: ${oldContentType}/${oldSlug} -> ${newContentType}/${newSlug}`);
                 
                 // Find all files in this folder from the index and update them
-                const indexEntries = this.indexService.findEntriesInFolder(oldRelPath);
+                const indexEntries = await this.indexService.findEntriesInFolder(oldRelPath);
                 
                 if (indexEntries.length === 0) {
                     Logger.info(`No index entries found for folder: ${oldRelPath}`);

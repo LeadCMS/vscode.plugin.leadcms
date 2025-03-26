@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs-extra';
 import { Logger } from '../utils/logger';
 import { ValidationResult, ValidationProblem, ValidationSeverity } from './validator';
 import { MediaValidator } from './media-validator';
 import { ContentValidator } from './content-validator';
+import { MetadataValidator } from './metadata-validator';
 
 /**
  * Service for validating content
@@ -20,6 +22,7 @@ export class ValidationService {
         // Register all validators
         this.validators.push(new MediaValidator(workspacePath));
         this.validators.push(new ContentValidator(workspacePath));
+        this.validators.push(new MetadataValidator(workspacePath));
     }
     
     /**
@@ -111,7 +114,17 @@ export class ValidationService {
     private processProblems(problems: ValidationProblem[]): void {
         const fileDiagnosticsMap = new Map<string, vscode.Diagnostic[]>();
         
-        for (const problem of problems) {
+        // Filter out problems for files that no longer exist
+        const existingProblems = problems.filter(problem => {
+            try {
+                return fs.existsSync(problem.filePath);
+            } catch (error) {
+                Logger.error(`Error checking if file exists: ${problem.filePath}`, error);
+                return false; // Skip this problem if we can't verify the file exists
+            }
+        });
+        
+        for (const problem of existingProblems) {
             try {
                 // Create a vscode diagnostic from the problem
                 const range = problem.range || new vscode.Range(0, 0, 0, 0);
@@ -134,7 +147,10 @@ export class ValidationService {
             }
         }
         
-        // Update the diagnostic collection
+        // We must clear the entire collection again to ensure deleted/renamed files don't keep their diagnostics
+        this.diagnosticCollection.clear();
+        
+        // Update the diagnostic collection only for files that exist
         for (const [filePath, diagnostics] of fileDiagnosticsMap.entries()) {
             try {
                 const fileUri = vscode.Uri.file(filePath);
