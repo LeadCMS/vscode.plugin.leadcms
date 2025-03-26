@@ -278,8 +278,8 @@ export class GatsbyService {
             this.terminal.sendText(`cd "${gatsbyPath}"`);
             this.terminal.sendText(`git pull`);
             this.terminal.sendText(`nvm use`);
-            this.terminal.sendText(`npm i --production`);
-            this.terminal.sendText(`GATSBY_CONTENT_PATH="${workspacePath}" PORT=${this.port} npm run start`);
+            this.terminal.sendText(`yarn`);
+            this.terminal.sendText(`GATSBY_CONTENT_PATH="${workspacePath}" PORT=${this.port} yarn start`);
             
             // Wait for server to start (you may want to implement a more sophisticated check)
             await new Promise(resolve => setTimeout(resolve, 5000));

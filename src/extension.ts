@@ -22,6 +22,7 @@ import {
     showWorkspaceRequiredError,
     showActivationError
 } from './utils/ui-helpers';
+import { ValidationService } from './validation/validation-service';
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize the logger
@@ -65,6 +66,9 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Initialize the new media validation service
         const mediaValidationService = new MediaValidationService(configService.getWorkspacePath(), mediaService);
+
+        // Create validation service
+        const validationService = new ValidationService(configService.getWorkspacePath());
 
         Logger.info('Services initialized, registering commands...');
 
@@ -388,7 +392,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 await contentService.pushContent();
             } catch (error: any) {
-                // Special handling for authentication errors
+                // ContentService now handles AuthenticationError directly, but just in case:
                 if (error instanceof AuthenticationError) {
                     await handleAuthenticationError(error);
                     return;
@@ -477,22 +481,48 @@ export function activate(context: vscode.ExtensionContext) {
             }
         });
 
-        // Command: Validate Media References
-        const validateMediaCommand = vscode.commands.registerCommand('onlinesales.validateMedia', async () => {
+        // Register the unified content validation command
+        const validateContentCommand = vscode.commands.registerCommand('onlinesales.validateContent', async () => {
             try {
-                const problemCount = await mediaValidationService.validateAllMediaReferences();
+                if (!checkWorkspace()) {
+                    return;
+                }
+                
+                // Create the validation service
+                const validationService = new ValidationService(configService.getWorkspacePath());
+                
+                // Show progress indicator while validating
+                const problemCount = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Validating content...',
+                    cancellable: false
+                }, async (progress) => {
+                    progress.report({ message: 'Checking content structure and media references...' });
+                    return await validationService.validateAll();
+                });
                 
                 if (problemCount === 0) {
-                    vscode.window.showInformationMessage('No missing media files found.');
+                    vscode.window.showInformationMessage('Content validation passed. No issues found.');
                 } else {
                     vscode.window.showWarningMessage(
-                        `Found ${problemCount} missing media references. Check Problems panel for details.`
+                        `Found ${problemCount} issues with your content. Check Problems panel for details.`
                     );
                 }
             } catch (error) {
-                showErrorWithDetails('Error validating media', error);
+                showErrorWithDetails('Error validating content', error);
             }
         });
+
+        // Add the command to context subscriptions
+        context.subscriptions.push(validateContentCommand);
+
+        // Keep the old command for backward compatibility, but it won't appear in UI
+        const validateMediaCommand = vscode.commands.registerCommand('onlinesales.validateMedia', async () => {
+            // Just redirect to the unified command
+            vscode.commands.executeCommand('onlinesales.validateContent');
+        });
+
+        context.subscriptions.push(validateMediaCommand);
 
         // Command: Preview MDX
         const previewMdxCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.previewMDX', async () => {
@@ -606,9 +636,9 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(showChangesCommand); 
         context.subscriptions.push(debugIndexCommand);
         context.subscriptions.push(markRenamedCommand);
-        context.subscriptions.push(validateMediaCommand);
+        // Don't push validateMediaCommand here since we want to hide it from the UI
         context.subscriptions.push(previewMdxCommand);
-        context.subscriptions.push(configureGatsbyPortCommand); // Add this line
+        context.subscriptions.push(configureGatsbyPortCommand);
         context.subscriptions.push(previewInBrowserCommand);
         context.subscriptions.push(toggleAutoPreviewCommand);
         

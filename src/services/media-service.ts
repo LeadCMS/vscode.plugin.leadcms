@@ -54,9 +54,23 @@ export class MediaService {
                 throw new Error(`Unable to determine content type and slug for media file: ${filePath}`);
             }
             
-            // Upload to API
-            const url = await this.apiService.uploadMedia(fileContent, fileName);
-            Logger.info(`Uploaded media file ${fileName} for content ${contentInfo.contentType}/${contentInfo.slug}`);
+            // Create scope in format "type/slug"
+            const scopeUid = `${contentInfo.contentType}/${contentInfo.slug}`;
+            
+            // Upload to API with proper scope
+            const response = await this.apiService.uploadMedia(fileContent, fileName, scopeUid);
+            
+            // Handle response which could be a string URL or an object with location property
+            let url: string;
+            if (typeof response === 'string') {
+                url = response;
+            } else if (response && typeof response === 'object' && typeof response.location === 'string') {
+                url = response.location;
+            } else {
+                throw new Error(`Invalid response from media upload. Expected string URL or object with location property, got: ${typeof response}, value: ${JSON.stringify(response)}`);
+            }
+            
+            Logger.info(`Uploaded media file ${fileName} for content ${scopeUid}, URL: ${url}`);
             
             return url;
         } catch (error) {
@@ -467,8 +481,8 @@ export class MediaService {
                 // Get just the filename if it's a full path
                 const fileName = path.basename(filePath);
                 
-                // Create API URL
-                const apiUrl = `/api/media/${slug}/${fileName}`;
+                // Create API URL - include contentType
+                const apiUrl = `/api/media/${contentType}/${slug}/${fileName}`;
                 
                 // Replace the file path with API URL
                 if (match.startsWith('![')) {
@@ -493,6 +507,7 @@ export class MediaService {
      */
     public convertMetadataMediaToApiRefs(
         metadata: any,
+        contentType: string,
         slug: string
     ): any {
         if (!metadata || typeof metadata !== 'object') {
@@ -508,7 +523,7 @@ export class MediaService {
             if (!result.coverImageUrl.includes('/api/media/')) {
                 // It's a local filename, convert it to API URL
                 const filename = path.basename(result.coverImageUrl);
-                result.coverImageUrl = `/api/media/${slug}/${filename}`;
+                result.coverImageUrl = `/api/media/${contentType}/${slug}/${filename}`;
             }
         }
         
@@ -667,7 +682,7 @@ export class MediaService {
     /**
      * Extract content type and slug from a file path
      */
-    private extractContentInfoFromPath(filePath: string): { contentType?: string, slug?: string } | null {
+    public extractContentInfoFromPath(filePath: string): { contentType?: string, slug?: string } | null {
         try {
             const relativePath = path.relative(this.workspacePath!, filePath);
             const pathParts = relativePath.split(path.sep);

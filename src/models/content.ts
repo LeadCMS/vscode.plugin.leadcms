@@ -29,6 +29,7 @@ export interface ContentCreateDto {
     coverImageUrl?: string;
     allowComments?: boolean;
     publishedAt?: string;
+    source?: string;
 }
 
 export interface ContentUpdateDto {
@@ -43,4 +44,5 @@ export interface ContentUpdateDto {
     coverImageUrl?: string;
     allowComments?: boolean;
     publishedAt?: string;
+    source?: string;
 }

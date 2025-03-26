@@ -52,8 +52,8 @@
         "title": "OnlineSales: Mark File as Renamed"
       },
       {
-        "command": "onlinesales.validateMedia",
-        "title": "OnlineSales: Validate Media References"
+        "command": "onlinesales.validateContent",
+        "title": "OnlineSales: Validate Content"
       },
       {
         "command": "onlinesales-vs-plugin.previewMDX",
@@ -71,7 +71,16 @@
         "command": "onlinesales-vs-plugin.toggleAutoPreview",
         "title": "OnlineSales: Toggle Auto-Preview MDX"
       }
-    ]
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "onlinesales.validateContent",
+          "group": "onlinesales",
+          "when": "resourceExtname == .mdx || resourceExtname == .json"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

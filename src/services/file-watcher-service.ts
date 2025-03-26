@@ -57,27 +57,36 @@ export class FileWatcherService {
                     this.fileOperationsInProgress.add(opId);
                     
                     try {
-                        // Update index - use try/catch to handle files not in the index
-                        try {
-                            await this.indexService.updateAfterRename(oldPath, newPath);
-                        } catch (indexError) {
-                            Logger.warn(`Attempted to rename ${path.relative(this.workspacePath, oldPath)}, but it's not in the index`);
-                            // Continue despite the index error
-                        }
+                        // Check if this is a directory rename
+                        const isDirectory = await this.isDirectory(newPath);
                         
-                        // Handle linked file (MDX->JSON or JSON->MDX)
-                        if (this.isContentFile(oldPath)) {
-                            await this.handleLinkedFileRename(oldPath, newPath);
-                        }
-                        
-                        // Handle media file rename
-                        if (this.isMediaFile(oldPath)) {
-                            await this.handleMediaFileRename(oldPath, newPath);
-                        }
-                        
-                        // Check for content type folder renames
-                        if (this.isContentTypeFolderRenamed(oldPath, newPath)) {
-                            await this.handleContentTypeFolderRename(oldPath, newPath);
+                        if (isDirectory) {
+                            Logger.info(`Directory rename detected: ${oldPath} -> ${newPath}`);
+                            // Handle directory rename using specialized method
+                            if (this.isContentTypeFolderRenamed(oldPath, newPath)) {
+                                await this.handleContentTypeFolderRename(oldPath, newPath);
+                            } else {
+                                // It's a regular content folder rename (like a slug folder)
+                                await this.handleContentFolderRename(oldPath, newPath);
+                            }
+                        } else {
+                            // Handle linked file (MDX->JSON or JSON->MDX)
+                            if (this.isContentFile(oldPath)) {
+                                await this.handleLinkedFileRename(oldPath, newPath);
+                            }
+                            
+                            // Handle media file rename
+                            if (this.isMediaFile(oldPath)) {
+                                await this.handleMediaFileRename(oldPath, newPath);
+                            }
+                            
+                            // Update index - use try/catch to handle files not in the index
+                            try {
+                                await this.indexService.updateAfterRename(oldPath, newPath);
+                            } catch (indexError) {
+                                Logger.warn(`Attempted to rename ${path.relative(this.workspacePath, oldPath)}, but it's not in the index`);
+                                // Continue despite the index error
+                            }
                         }
                     } finally {
                         // Remove operation from tracking
@@ -376,54 +385,41 @@ export class FileWatcherService {
                 
                 Logger.info(`Content folder renamed: ${oldContentType}/${oldSlug} -> ${newContentType}/${newSlug}`);
                 
-                // Update index for the MDX and JSON files
-                const oldMdxPath = path.join(oldPath, 'index.mdx');
-                const newMdxPath = path.join(newPath, 'index.mdx');
-                const oldJsonPath = path.join(oldPath, 'index.json');
-                const newJsonPath = path.join(newPath, 'index.json');
+                // Find all files in this folder from the index and update them
+                const indexEntries = this.indexService.findEntriesInFolder(oldRelPath);
                 
-                // Update index entries
-                if (await fs.pathExists(newMdxPath)) {
-                    try {
-                        await this.indexService.updateAfterRename(oldMdxPath, newMdxPath);
-                    } catch (error) {
-                        Logger.warn(`Could not update index for ${oldMdxPath}, might not be indexed yet`);
-                    }
+                if (indexEntries.length === 0) {
+                    Logger.info(`No index entries found for folder: ${oldRelPath}`);
                 }
                 
-                if (await fs.pathExists(newJsonPath)) {
+                // For each entry in the old folder, update its path in the index
+                for (const entry of indexEntries) {
+                    const oldEntryPath = entry.localPath;
+                    const relativePath = path.relative(oldRelPath, oldEntryPath);
+                    const newEntryPath = path.join(newRelPath, relativePath);
+                    
+                    Logger.info(`Updating index for file in renamed folder: ${oldEntryPath} -> ${newEntryPath}`);
+                    
                     try {
-                        await this.indexService.updateAfterRename(oldJsonPath, newJsonPath);
-                    } catch (error) {
-                        Logger.warn(`Could not update index for ${oldJsonPath}, might not be indexed yet`);
-                    }
-                }
-                
-                // If content type changed, we need to handle that differently
-                if (oldContentType !== newContentType) {
-                    // Need to update references in other files
-                    await ContentReferenceUtils.updateContentTypeReferencesInFolder(
-                        this.workspacePath,
-                        newPath,
-                        oldContentType,
-                        newContentType
-                    );
-                }
-                
-                // If slug changed, update the JSON file to reflect this
-                if (oldSlug !== newSlug && await fs.pathExists(newJsonPath)) {
-                    try {
-                        const jsonContent = await fs.readFile(newJsonPath, 'utf8');
-                        const metadata = JSON.parse(jsonContent);
+                        // Convert back to absolute paths for the index method
+                        const oldAbsPath = path.join(this.workspacePath, oldEntryPath);
+                        const newAbsPath = path.join(this.workspacePath, newEntryPath);
                         
-                        // Update any references in MDX that might still have old slug
-                        if (await fs.pathExists(newMdxPath)) {
-                            await ContentReferenceUtils.updateSlugReferencesInMdx(
-                                newMdxPath,
-                                oldSlug,
-                                newSlug
-                            );
-                        }
+                        await this.indexService.updateAfterRename(oldAbsPath, newAbsPath);
+                    } catch (error: any) {
+                        Logger.warn(`Failed to update index for ${oldEntryPath}: ${error.message}`);
+                    }
+                }
+                
+                // Update references in MDX files if slug changed
+                if (oldSlug !== newSlug && await fs.pathExists(path.join(newPath, 'index.mdx'))) {
+                    try {
+                        const mdxPath = path.join(newPath, 'index.mdx');
+                        await ContentReferenceUtils.updateSlugReferencesInMdx(
+                            mdxPath,
+                            oldSlug,
+                            newSlug
+                        );
                     } catch (error) {
                         Logger.error(`Error updating references after folder rename: ${error}`);
                     }
@@ -499,6 +495,19 @@ export class FileWatcherService {
             return false;
         } catch (error) {
             Logger.error(`Error checking if file exists in index: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * Check if a path is a directory
+     */
+    private async isDirectory(filePath: string): Promise<boolean> {
+        try {
+            const stats = await fs.stat(filePath);
+            return stats.isDirectory();
+        } catch (error) {
+            Logger.error(`Error checking if path is a directory: ${filePath}`, error);
             return false;
         }
     }

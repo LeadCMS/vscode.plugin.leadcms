@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Logger class for OnlineSales VS plugin
  */
 export class Logger {
     private static outputChannel: vscode.OutputChannel | undefined;
+    private static workspacePath: string | undefined;
     
     /**
      * Initialize the logger with a VS Code output channel
@@ -13,6 +16,18 @@ export class Logger {
         if (!this.outputChannel) {
             this.outputChannel = vscode.window.createOutputChannel('OnlineSales CMS');
         }
+        
+        // Try to determine workspace path if not explicitly set
+        if (!this.workspacePath && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            this.workspacePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        }
+    }
+    
+    /**
+     * Set the workspace path for log file storage
+     */
+    public static setWorkspacePath(path: string): void {
+        this.workspacePath = path;
     }
     
     /**
@@ -140,9 +155,63 @@ export class Logger {
         this.outputChannel!.show();
     }
     
+    /**
+     * Log complete content payload for debugging validation issues
+     * Writes to a separate log file to avoid cluttering the main logs
+     */
+    public static logContentPayload(action: string, content: any): void {
+        const timestamp = new Date().toISOString();
+        const contentLog = `\n\n=== ${timestamp} - ${action} ===\n${JSON.stringify(content, null, 2)}\n`;
+        
+        // Get the logs directory path
+        const logFile = getLogFilePath('content-payloads.log');
+        
+        try {
+            if (!fs.existsSync(path.dirname(logFile))) {
+                fs.mkdirSync(path.dirname(logFile), { recursive: true });
+            }
+            
+            // Append to log file
+            fs.appendFileSync(logFile, contentLog);
+            
+            // Also log to console a message saying where to find the detailed log
+            console.log(`Content payload logged to: ${logFile}`);
+        } catch (error) {
+            console.error('Failed to write content payload to log file:', error);
+        }
+    }
+    
     private static ensureInitialized(): void {
         if (!this.outputChannel) {
             this.init();
         }
     }
+    
+    /**
+     * Get the path to the workspace logs directory
+     * Returns the path or undefined if no workspace is open
+     */
+    public static getLogsDirectory(): string | undefined {
+        if (!this.workspacePath) {
+            // Try to get workspace path one more time
+            if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                this.workspacePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            } else {
+                return undefined;
+            }
+        }
+        
+        return path.join(this.workspacePath, '.onlinesales', 'logs');
+    }
+}
+
+function getLogFilePath(fileName: string): string {
+    const logsDir = Logger.getLogsDirectory();
+    
+    if (logsDir) {
+        return path.join(logsDir, fileName);
+    }
+    
+    // Fallback to extension directory if no workspace is available
+    return path.join(__dirname, '..', '..', 'logs', fileName);
 }

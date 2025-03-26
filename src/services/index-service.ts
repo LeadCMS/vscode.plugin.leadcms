@@ -6,7 +6,6 @@ import { ContentIndex, IndexEntry, FileStatus, FileType, ChangeReport } from '..
 import { ContentDetailsDto } from '../models/content';
 import { ConfigService } from './config-service';
 import { Logger } from '../utils/logger';
-import { ContentReferenceUtils } from '../utils/content-reference-utils';
 
 /**
  * Service for managing the content index, which tracks the state of content
@@ -45,7 +44,7 @@ export class IndexService {
     /**
      * Convert an absolute path to a path relative to the workspace
      */
-    private toRelativePath(absolutePath: string): string {
+    public toRelativePath(absolutePath: string): string {
         if (!this.workspacePath) {
             throw new Error('No workspace path available');
         }
@@ -56,7 +55,7 @@ export class IndexService {
     /**
      * Convert a relative path to an absolute path
      */
-    private toAbsolutePath(relativePath: string): string {
+    public toAbsolutePath(relativePath: string): string {
         if (!this.workspacePath) {
             throw new Error('No workspace path available');
         }
@@ -194,7 +193,7 @@ export class IndexService {
             // Check existing content MDX entry
             const existingMdxEntry = this.index!.entries[contentRelPath];
             
-            // Add content MDX entry
+            // Add content MDX entry with bidirectional relationship
             this.index!.entries[contentRelPath] = {
                 id: content.id,
                 fileType: FileType.CONTENT,
@@ -212,7 +211,7 @@ export class IndexService {
             // Check existing metadata JSON entry
             const existingMetaEntry = this.index!.entries[metadataRelPath];
             
-            // Add metadata JSON entry
+            // Add metadata JSON entry with bidirectional relationship
             this.index!.entries[metadataRelPath] = {
                 id: content.id,
                 fileType: FileType.METADATA,
@@ -388,10 +387,13 @@ export class IndexService {
         
         Logger.info(`Completed first pass: ${changes.deleted.length} deleted, ${changes.modified.length} modified`);
         
-        // Check for new files (instead of trying to detect renames by hash)
+        // Scan for new files - enhanced approach to ensure we catch all files
         try {
-            // Check content directory for new files (which now includes media files)
-            await this.scanForNewFiles('content', changes, mediaExtensions);
+            // Check content directory for new files
+            await this.scanContentDirectory(changes, mediaExtensions);
+            
+            // Fix any missing bidirectional relationships
+            await this.fixMissingRelationships();
             
             Logger.info(`Directory scan complete. Found ${changes.new.length} new files`);
         } catch (error) {
@@ -405,23 +407,26 @@ export class IndexService {
     }
 
     /**
-     * Scan a directory for new files not in the index
+     * Enhanced method to scan the entire content directory structure
      */
-    private async scanForNewFiles(
-        dirName: string, 
+    private async scanContentDirectory(
         changes: ChangeReport,
         mediaExtensions: string[]
     ): Promise<void> {
-        const dirPath = path.join(this.workspacePath!, dirName);
-        if (!(await fs.pathExists(dirPath))) {
+        const contentDir = path.join(this.workspacePath!, 'content');
+        if (!(await fs.pathExists(contentDir))) {
             return;
         }
+
+        // Use our getAllFiles method to get a complete list of all files
+        const allFiles = await this.getAllFiles(contentDir);
+        Logger.info(`Found ${allFiles.length} total files in content directory`);
         
-        // Use glob to find all files recursively
-        const files = await this.getAllFiles(dirPath);
+        // Collect all files first, then establish relationships
+        const newFiles: { path: string, relPath: string, fileType: FileType, contentInfo: any }[] = [];
         
-        // Check if any files are not in the index
-        for (const filePath of files) {
+        // First pass: identify all new files
+        for (const filePath of allFiles) {
             const relPath = this.toRelativePath(filePath);
             
             // Skip if already in index
@@ -429,19 +434,25 @@ export class IndexService {
                 continue;
             }
             
-            // This is a new file
+            // Skip files outside the content directory
+            if (!relPath.startsWith('content/')) {
+                continue;
+            }
+            
+            // Determine file type based on extension and path structure
             const fileExt = path.extname(filePath).toLowerCase();
-            let fileType: FileType;
+            let fileType: FileType | null = null;
             
             if (fileExt === '.mdx') {
                 fileType = FileType.CONTENT;
-            } else if (fileExt === '.json' && relPath.includes('/content/')) {
+            } else if (fileExt === '.json' && path.basename(filePath) === 'index.json') {
                 fileType = FileType.METADATA;
-            } else if (mediaExtensions.includes(fileExt) && relPath.includes('/content/')) {
-                // Media files are now within content folders
+            } else if (mediaExtensions.includes(fileExt)) {
                 fileType = FileType.MEDIA;
-            } else {
-                // Skip files we don't track
+            }
+            
+            // Skip files we don't track
+            if (fileType === null) {
                 continue;
             }
             
@@ -456,49 +467,175 @@ export class IndexService {
             
             const now = new Date().toISOString();
             
-            // Add to index as a new file - with all required properties
+            // Extract content info for better metadata
+            const contentInfo = this.extractContentInfoFromPath(filePath);
+            
+            // Add to index as a new file
             this.index!.entries[relPath] = {
                 id: `local:${relPath}`, // Temporary ID for local files
                 fileType,
                 localPath: relPath,
                 hash,
                 status: FileStatus.NEW,
-                lastModifiedLocal: now
+                lastModifiedLocal: now,
+                contentType: contentInfo.contentType
             };
             
+            // Add to our list for relationship processing
+            newFiles.push({
+                path: filePath,
+                relPath,
+                fileType,
+                contentInfo
+            });
+            
             changes.new.push(relPath);
-            Logger.info(`Found new file: ${relPath}`);
+            Logger.info(`Added new file to index: ${relPath} (${fileType})`);
+        }
+        
+        // Second pass: establish relationships between files
+        for (const newFile of newFiles) {
+            if (newFile.fileType === FileType.CONTENT || newFile.fileType === FileType.METADATA) {
+                const relatedPath = this.getRelatedFilePath(newFile.path);
+                
+                if (relatedPath && await fs.pathExists(relatedPath)) {
+                    const relatedRelPath = this.toRelativePath(relatedPath);
+                    
+                    // Add bidirectional relationship
+                    if (this.index!.entries[newFile.relPath]) {
+                        // Set or update relatedEntryIds for current file
+                        if (!this.index!.entries[newFile.relPath].relatedEntryIds) {
+                            this.index!.entries[newFile.relPath].relatedEntryIds = [];
+                        }
+                        if (!this.index!.entries[newFile.relPath].relatedEntryIds!.includes(relatedRelPath)) {
+                            this.index!.entries[newFile.relPath].relatedEntryIds!.push(relatedRelPath);
+                        }
+                    }
+                    
+                    // Also set relationship on related file if it exists in index
+                    if (this.index!.entries[relatedRelPath]) {
+                        if (!this.index!.entries[relatedRelPath].relatedEntryIds) {
+                            this.index!.entries[relatedRelPath].relatedEntryIds = [];
+                        }
+                        if (!this.index!.entries[relatedRelPath].relatedEntryIds!.includes(newFile.relPath)) {
+                            this.index!.entries[relatedRelPath].relatedEntryIds!.push(newFile.relPath);
+                        }
+                    }
+                }
+            }
         }
     }
 
     /**
-     * Get all files in a directory recursively
+     * Fix any missing bidirectional relationships in the index
+     */
+    private async fixMissingRelationships(): Promise<void> {
+        if (!this.index) {
+            return;
+        }
+        
+        const entries = this.index.entries;
+        let relationshipsFixed = 0;
+        
+        // Identify all content and metadata files
+        const contentFiles: string[] = [];
+        const metadataFiles: string[] = [];
+        
+        for (const [relPath, entry] of Object.entries(entries)) {
+            if (entry.fileType === FileType.CONTENT) {
+                contentFiles.push(relPath);
+            } else if (entry.fileType === FileType.METADATA) {
+                metadataFiles.push(relPath);
+            }
+        }
+        
+        // For each content file, ensure it has a relationship with its metadata file
+        for (const contentPath of contentFiles) {
+            const contentEntry = entries[contentPath];
+            
+            // Skip entries that already have relationships defined
+            if (contentEntry.relatedEntryIds && contentEntry.relatedEntryIds.length > 0) {
+                continue;
+            }
+            
+            // Find the matching metadata file by converting the path
+            const contentAbsPath = this.toAbsolutePath(contentPath);
+            const metadataAbsPath = this.getRelatedFilePath(contentAbsPath);
+            
+            if (!metadataAbsPath) {
+                continue;
+            }
+            
+            const metadataPath = this.toRelativePath(metadataAbsPath);
+            
+            // If the metadata file exists in the index, establish the relationship
+            if (entries[metadataPath]) {
+                // Add relationship from content to metadata
+                if (!contentEntry.relatedEntryIds) {
+                    contentEntry.relatedEntryIds = [];
+                }
+                if (!contentEntry.relatedEntryIds.includes(metadataPath)) {
+                    contentEntry.relatedEntryIds.push(metadataPath);
+                    relationshipsFixed++;
+                }
+                
+                // Add relationship from metadata to content if needed
+                const metadataEntry = entries[metadataPath];
+                if (!metadataEntry.relatedEntryIds) {
+                    metadataEntry.relatedEntryIds = [];
+                }
+                if (!metadataEntry.relatedEntryIds.includes(contentPath)) {
+                    metadataEntry.relatedEntryIds.push(contentPath);
+                    relationshipsFixed++;
+                }
+            }
+        }
+        
+        if (relationshipsFixed > 0) {
+            Logger.info(`Fixed ${relationshipsFixed} missing bidirectional relationships`);
+        }
+    }
+
+    /**
+     * Get all files in a directory recursively - improved with better error handling
      */
     private async getAllFiles(dirPath: string): Promise<string[]> {
         try {
+            if (!(await fs.pathExists(dirPath))) {
+                return [];
+            }
+            
             const entries = await fs.readdir(dirPath, { withFileTypes: true });
             
             const files: string[] = [];
             for (const entry of entries) {
                 const fullPath = path.join(dirPath, entry.name);
                 
-                if (entry.isDirectory()) {
-                    // Skip .git, node_modules, etc.
-                    if (['.git', 'node_modules', '.onlinesales'].includes(entry.name)) {
-                        continue;
+                try {
+                    if (entry.isDirectory()) {
+                        // Skip hidden directories and node_modules
+                        if (entry.name.startsWith('.') || 
+                            entry.name === 'node_modules') {
+                            continue;
+                        }
+                        
+                        // Recursively get files in subdirectories
+                        const subFiles = await this.getAllFiles(fullPath);
+                        files.push(...subFiles);
+                    } else {
+                        // Add all files - we'll filter by type later
+                        files.push(fullPath);
                     }
-                    
-                    // Recursively get files in subdirectories
-                    const subFiles = await this.getAllFiles(fullPath);
-                    files.push(...subFiles);
-                } else {
-                    files.push(fullPath);
+                } catch (error) {
+                    Logger.error(`Error processing entry ${fullPath}:`, error);
+                    // Continue with other entries
+                    continue;
                 }
             }
             
             return files;
         } catch (error) {
-            Logger.error(`Error getting files in ${dirPath}:`, error);
+            Logger.error(`Error listing directory ${dirPath}:`, error);
             return [];
         }
     }
@@ -853,5 +990,66 @@ export class IndexService {
             return filePath.replace('index.json', 'index.mdx');
         }
         return null;
+    }
+
+    /**
+     * Get an entry by its file path
+     */
+    public getEntryByPath(filePath: string): IndexEntry | undefined {
+        if (!this.index) {
+            throw new Error('Index not loaded');
+        }
+        
+        // Convert to relative path if necessary
+        const relPath = path.isAbsolute(filePath) ? this.toRelativePath(filePath) : filePath;
+        
+        return this.index.entries[relPath];
+    }
+    
+    /**
+     * Remove an entry from the index and save
+     */
+    public async removeEntry(filePath: string): Promise<void> {
+        if (!this.index) {
+            throw new Error('Index not loaded');
+        }
+        
+        // Convert to relative path if necessary
+        const relPath = path.isAbsolute(filePath) ? this.toRelativePath(filePath) : filePath;
+        
+        if (this.index.entries[relPath]) {
+            delete this.index.entries[relPath];
+            await this.saveIndex();
+        }
+    }
+
+    /**
+     * Find all index entries in a specific folder
+     * @param folderPath The relative folder path to search in
+     * @returns Array of index entries in the folder
+     */
+    public findEntriesInFolder(folderPath: string): IndexEntry[] {
+        this.ensureWorkspaceExists();
+        
+        if (!this.index) {
+            Logger.warn('Index not loaded when searching for entries in folder');
+            return [];
+        }
+        
+        const normalizedFolderPath = folderPath.endsWith(path.sep) 
+            ? folderPath
+            : folderPath + path.sep;
+        
+        const result: IndexEntry[] = [];
+        
+        // Find all entries where the path starts with the folder path
+        for (const [entryPath, entry] of Object.entries(this.index.entries)) {
+            if (entryPath.startsWith(normalizedFolderPath) || entryPath === folderPath) {
+                result.push(entry);
+            }
+        }
+        
+        Logger.info(`Found ${result.length} index entries in folder: ${folderPath}`);
+        return result;
     }
 }

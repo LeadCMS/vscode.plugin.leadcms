@@ -304,6 +304,9 @@ export class ApiService {
             // Ensure fresh client with latest config
             await this.ensureClientInitialized();
 
+            // Log detailed content data for debugging
+            Logger.info(`Creating content with API - endpoint: /content, slug: ${content.slug}, type: ${content.type}, title: ${content.title}`);
+
             const response = await this.client!.post<ContentDetailsDto>('/content', content);
             return response.data;
         } catch (error: any) {
@@ -312,10 +315,36 @@ export class ApiService {
                 throw new Error('Workspace not initialized');
             }
 
-            if (axios.isAxiosError(error) && error.response?.status === 401) {
-                Logger.error('Authentication failed (401 Unauthorized)', error);
-                throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
+            if (axios.isAxiosError(error) && error.response) {
+                const status = error.response.status;
+                
+                // Log detailed information about the failed request
+                Logger.error(`Content creation failed with status ${status}`, {
+                    status: error.response.status,
+                    statusText: error.response.statusText,
+                    data: error.response.data,
+                    contentType: content.type,
+                    contentSlug: content.slug,
+                    contentTitle: content.title,
+                    contentLength: content.body?.length || 0,
+                    contentBodyPreview: content.body?.substring(0, 200) + (content.body?.length ? (content.body.length > 200 ? '...' : '') : ''),
+                    requestHeaders: error.config?.headers,
+                    fullPayload: content  // Log the entire content object for deep debugging
+                });
+                
+                if (status === 401) {
+                    throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
+                } else if (status === 406) {
+                    // Log full content payload to a separate file for debugging
+                    Logger.logContentPayload('CONTENT CREATION FAILED (406)', content);
+                    
+                    // Show more helpful error message
+                    const message = 'Content validation failed (HTTP 406): The server rejected the content format. ' +
+                                   'Complete content payload has been logged for debugging.';
+                    throw new Error(message);
+                }
             }
+            
             Logger.error('Failed to create content', error);
             // Replace direct error message with utility function
             showErrorWithDetails('Failed to create content', error);
@@ -328,7 +357,75 @@ export class ApiService {
             // Ensure fresh client with latest config
             await this.ensureClientInitialized();
 
+            // Log detailed content data for debugging
+            Logger.info(`Updating content with API - endpoint: /content/${id}, slug: ${content.slug}, title: ${content.title}`);
+
             const response = await this.client!.patch<ContentDetailsDto>(`/content/${id}`, content);
+            return response.data;
+        } catch (error: any) {
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+                throw new Error('Workspace not initialized');
+            }
+
+            if (axios.isAxiosError(error) && error.response) {
+                const status = error.response.status;
+                
+                // Log detailed information about the failed request
+                Logger.error(`Content update failed with status ${status}`, {
+                    status: error.response.status,
+                    statusText: error.response.statusText,
+                    data: error.response.data,
+                    contentId: id,
+                    contentSlug: content.slug,
+                    contentTitle: content.title,
+                    contentLength: content.body?.length || 0,
+                    contentBodyPreview: content.body?.substring(0, 200) + (content.body?.length ? (content.body.length > 200 ? '...' : '') : ''),
+                    requestHeaders: error.config?.headers,
+                    fullPayload: content  // Log the entire content object for deep debugging
+                });
+
+                if (status === 401) {
+                    throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
+                } else if (status === 406) {
+                    // Log full content payload to a separate file for debugging
+                    Logger.logContentPayload(`CONTENT UPDATE FAILED (406) - ID: ${id}`, content);
+                    
+                    // Show more helpful error message
+                    const message = 'Content validation failed (HTTP 406): The server rejected the content format. ' +
+                                   'Complete content payload has been logged for debugging.';
+                    throw new Error(message);
+                }
+            }
+            
+            Logger.error(`Failed to update content with ID ${id}:`, error);
+            // Replace direct error message with utility function
+            showErrorWithDetails('Failed to update content', error);
+            throw new Error(`Failed to update content with ID ${id}`);
+        }
+    }
+
+    /**
+     * Uploads a media file to the API
+     * @returns Either a string URL or an object with a location property
+     */
+    public async uploadMedia(fileContent: Buffer, fileName: string, scopeUid: string): Promise<string | { location: string }> {
+        try {
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
+
+            // Create form data
+            const formData = new FormData();
+            formData.append('Image', new Blob([fileContent]), fileName);
+            formData.append('ScopeUid', scopeUid);
+
+            const response = await this.client!.post<string | { location: string }>('/media', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data'
+                },
+            });
+            
+            Logger.info(`Media upload response type: ${typeof response.data}, value: ${JSON.stringify(response.data)}`);
             return response.data;
         } catch (error: any) {
             if (error instanceof WorkspaceNotInitializedError) {
@@ -340,39 +437,67 @@ export class ApiService {
                 Logger.error('Authentication failed (401 Unauthorized)', error);
                 throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
             }
-            Logger.error(`Failed to update content with ID ${id}:`, error);
-            // Replace direct error message with utility function
-            showErrorWithDetails('Failed to update content', error);
-            throw new Error(`Failed to update content with ID ${id}`);
+            Logger.error('Failed to upload media file', error);
+            showErrorWithDetails('Failed to upload media file', error);
+            throw new Error('Failed to upload media file');
         }
     }
 
-    public async uploadMedia(file: Buffer, filename: string): Promise<string> {
+    /**
+     * Deletes a content item from the API
+     */
+    public async deleteContent(id: string): Promise<void> {
         try {
             // Ensure fresh client with latest config
             await this.ensureClientInitialized();
 
-            const formData = new FormData();
-            const blob = new Blob([file], { type: 'application/octet-stream' });
-            formData.append('file', blob, filename);
-
-            Logger.info(`Uploading media file: ${filename} (${file.length} bytes)`);
-            
-            const response = await this.client!.post('/media', formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data'
-                }
-            });
-            
-            return response.data.url;
-        } catch (error) {
+            await this.client!.delete(`/content/${id}`);
+        } catch (error: any) {
             if (error instanceof WorkspaceNotInitializedError) {
                 await handleWorkspaceNotInitializedError();
                 throw new Error('Workspace not initialized');
             }
 
-            Logger.error(`Failed to upload media: ${filename}`, error);
-            throw new Error('Failed to upload media');
+            if (axios.isAxiosError(error) && error.response?.status === 401) {
+                Logger.error('Authentication failed (401 Unauthorized)', error);
+                throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
+            }
+            Logger.error(`Failed to delete content with ID ${id}:`, error);
+            showErrorWithDetails('Failed to delete content', error);
+            throw new Error(`Failed to delete content with ID ${id}`);
+        }
+    }
+
+    /**
+     * Deletes a media file from the API
+     * @param mediaPath The full media path in format type/slug/filename
+     */
+    public async deleteMedia(mediaPath: string): Promise<void> {
+        try {
+            // Ensure fresh client with latest config
+            await this.ensureClientInitialized();
+
+            Logger.info(`Deleting media file: ${mediaPath}`);
+            
+            // The API expects the path to be URL encoded
+            const encodedPath = encodeURIComponent(mediaPath);
+            await this.client!.delete(`/api/media/${encodedPath}`);
+            
+            Logger.info(`Successfully deleted media file: ${mediaPath}`);
+        } catch (error: any) {
+            if (error instanceof WorkspaceNotInitializedError) {
+                await handleWorkspaceNotInitializedError();
+                throw new Error('Workspace not initialized');
+            }
+
+            if (axios.isAxiosError(error) && error.response?.status === 401) {
+                Logger.error('Authentication failed (401 Unauthorized)', error);
+                throw new AuthenticationError('Your authentication token is invalid or expired. Please re-authenticate.');
+            }
+            
+            Logger.error(`Failed to delete media file ${mediaPath}:`, error);
+            showErrorWithDetails('Failed to delete media file', error);
+            throw new Error(`Failed to delete media file: ${mediaPath}`);
         }
     }
 
