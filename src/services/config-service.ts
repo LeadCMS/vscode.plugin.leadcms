@@ -354,28 +354,6 @@ export class ConfigService {
             throw error;
         }
     }
-
-    /**
-     * Get user-specific settings from file
-     * @deprecated Use VS Code settings instead
-     */
-    public async getUserSettings(): Promise<UserSettings> {
-        Logger.warn('getUserSettings is deprecated. Use getGatsbyPath instead.');
-        return {
-            gatsbyPath: await this.getGatsbyPath()
-        };
-    }
-    
-    /**
-     * Save user-specific settings to file
-     * @deprecated Use saveGatsbyPath instead
-     */
-    public async saveUserSettings(settings: UserSettings): Promise<void> {
-        Logger.warn('saveUserSettings is deprecated. Use saveGatsbyPath instead.');
-        if (settings.gatsbyPath) {
-            await this.saveGatsbyPath(settings.gatsbyPath);
-        }
-    }
     
     /**
      * Ensure the specified path is in .gitignore
@@ -403,14 +381,6 @@ export class ConfigService {
         } catch (error) {
             Logger.warn('Failed to update .gitignore:', error);
         }
-    }
-    
-    /**
-     * Ensure .gitignore excludes user-specific settings
-     * @deprecated Use ensureGitIgnoreContains instead
-     */
-    public async ensureGitIgnore(): Promise<void> {
-        await this.ensureGitIgnoreContains('.vscode/settings.json');
     }
     
     /**

@@ -11,13 +11,11 @@ import { Logger } from './utils/logger';
 import { AuthenticationError } from './utils/errors';
 import { IndexService } from './services/index-service';
 import { FileWatcherService } from './services/file-watcher-service';
-import { MediaValidationService } from './services/media-validation-service';
 import { GatsbyService } from './services/gatsby-service';
 import { PreviewService } from './services/preview-service';
 import { 
     showError, 
     showErrorWithDetails, 
-    showErrorWithLogsOption, 
     handleAuthenticationError, 
     showWorkspaceRequiredError,
     showActivationError
@@ -63,9 +61,6 @@ export function activate(context: vscode.ExtensionContext) {
                 Logger.warn('Failed to set up F5 experience:', error);
             });
         }
-
-        // Initialize the new media validation service
-        const mediaValidationService = new MediaValidationService(configService.getWorkspacePath(), mediaService);
 
         // Create validation service
         const validationService = new ValidationService(configService.getWorkspacePath());
@@ -596,11 +591,11 @@ export function activate(context: vscode.ExtensionContext) {
         );
         
         fileWatcher.onDidChange(async (uri) => {
-            await mediaValidationService.validateSingleFile(uri.fsPath);
+            await validationService.validateFile(uri.fsPath);
         });
 
         fileWatcher.onDidCreate(async (uri) => {
-            await mediaValidationService.validateSingleFile(uri.fsPath);
+            await validationService.validateFile(uri.fsPath);
         });
         
         context.subscriptions.push(fileWatcher);
