@@ -524,6 +524,7 @@ export class ContentService {
                                                 tags: metadata.tags || [],
                                                 category: metadata.category || '',
                                                 coverImageUrl: metadata.coverImageUrl || '',
+                                                coverImageAlt: metadata.coverImageAlt || '',
                                                 allowComments: metadata.allowComments === undefined ? true : metadata.allowComments,
                                                 source: metadata.source || '',
                                                 publishedAt: metadata.publishedAt || new Date().toISOString()
@@ -766,6 +767,7 @@ export class ContentService {
                                     tags: metadata.tags || [],
                                     category: metadata.category || '',
                                     coverImageUrl: metadata.coverImageUrl || '',
+                                    coverImageAlt: metadata.coverImageAlt || '',
                                     allowComments: metadata.allowComments === undefined ? true : metadata.allowComments,
                                     source: metadata.source || '',
                                     publishedAt: metadata.publishedAt || new Date().toISOString()
@@ -813,6 +815,7 @@ export class ContentService {
                                     tags: metadata.tags || [],
                                     category: metadata.category || '',
                                     coverImageUrl: metadata.coverImageUrl || '',
+                                    coverImageAlt: metadata.coverImageAlt || '',
                                     allowComments: metadata.allowComments === undefined ? true : metadata.allowComments,
                                     source: metadata.source || '',
                                     publishedAt: metadata.publishedAt || new Date().toISOString()
@@ -824,7 +827,8 @@ export class ContentService {
                                     `Body length: ${createDto.body?.length || 0}, ` +
                                     `Body preview: ${createDto.body?.substring(0, 100) + (createDto.body?.length ?? 0 > 100 ? '...' : '')}, ` +
                                     `Slug: ${createDto.slug}, Type: ${createDto.type}, ` +
-                                    `Cover image: ${createDto.coverImageUrl || 'none'}`);
+                                    `Cover image: ${createDto.coverImageUrl || 'none'}, ` +
+                                    `Cover image alt: ${createDto.coverImageAlt || 'none'}`);
                                 
                                 const newContent = await this.apiService.createContent(createDto);
                                 

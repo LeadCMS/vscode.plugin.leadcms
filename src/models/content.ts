@@ -9,7 +9,8 @@ export interface ContentDetailsDto {
     language: string;
     tags: string[];
     category: string;
-    coverImageUrl: string;
+    coverImageUrl?: string;
+    coverImageAlt?: string;
     allowComments: boolean;
     publishedAt: string;
     createdAt: string;
@@ -27,6 +28,7 @@ export interface ContentCreateDto {
     tags?: string[];
     category?: string;
     coverImageUrl?: string;
+    coverImageAlt?: string;
     allowComments?: boolean;
     publishedAt?: string;
     source?: string;
@@ -42,6 +44,7 @@ export interface ContentUpdateDto {
     tags?: string[];
     category?: string;
     coverImageUrl?: string;
+    coverImageAlt?: string;
     allowComments?: boolean;
     publishedAt?: string;
     source?: string;

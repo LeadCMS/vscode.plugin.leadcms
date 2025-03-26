@@ -7,7 +7,7 @@ export class PreviewService {
     private panels: Map<string, vscode.WebviewPanel> = new Map();
     private activePanel: vscode.WebviewPanel | undefined;
     private activeEditorListener: vscode.Disposable | undefined;
-    private isAutoPreviewEnabled: boolean = false;
+    private isAutoPreviewEnabled: boolean = true;
     private disposedPanels: Set<vscode.WebviewPanel> = new Set(); // Track disposed panels
     
     constructor(private gatsbyService: GatsbyService) {
@@ -70,24 +70,6 @@ export class PreviewService {
             Logger.error('Error updating preview for active editor:', error);
             // Don't show error to user for automatic updates
         }
-    }
-    
-    /**
-     * Enable or disable automatic preview updates
-     * @param enable Whether to enable auto-preview
-     */
-    public async toggleAutoPreview(): Promise<boolean> {
-        this.isAutoPreviewEnabled = !this.isAutoPreviewEnabled;
-        
-        // If enabling, immediately update for current editor
-        if (this.isAutoPreviewEnabled && vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
-            if (editor.document.fileName.toLowerCase().endsWith('.mdx')) {
-                await this.updatePreviewForActiveEditor(editor);
-            }
-        }
-        
-        return this.isAutoPreviewEnabled;
     }
     
     /**

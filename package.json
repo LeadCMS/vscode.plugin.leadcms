@@ -62,14 +62,6 @@
       {
         "command": "onlinesales-vs-plugin.configureGatsbyPort",
         "title": "OnlineSales: Configure Gatsby Port"
-      },
-      {
-        "command": "onlinesales-vs-plugin.previewInBrowser",
-        "title": "OnlineSales: Preview MDX in Browser"
-      },
-      {
-        "command": "onlinesales-vs-plugin.toggleAutoPreview",
-        "title": "OnlineSales: Toggle Auto-Preview MDX"
       }
     ],
     "menus": {

@@ -91,8 +91,8 @@ export function activate(context: vscode.ExtensionContext) {
                 }
                 
                 const domain = await vscode.window.showInputBox({
-                    prompt: 'Enter OnlineSales instance domain (e.g., https://cms.waveservice.app)',
-                    placeHolder: 'https://cms.waveservice.app',
+                    prompt: 'Enter OnlineSales instance domain (e.g., https://cms.onlinesales.tech)',
+                    placeHolder: 'https://cms.onlinesales.tech',
                     validateInput: input => {
                         return input && input.trim().length > 0 ? null : 'Domain is required';
                     }
@@ -103,15 +103,8 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
                 
-                // Ask about local media references
-                const useLocalMediaReferences = await vscode.window.showQuickPick(['Yes', 'No'], {
-                    placeHolder: 'Replace remote media URLs with local references?',
-                    canPickMany: false
-                });
-                
                 const config: OnlineSalesConfig = {
                     domain: domain.trim(),
-                    useLocalMediaReferences: useLocalMediaReferences === 'Yes',
                     // Add default preview URL patterns for common content types
                     previewUrls: {
                         page: {
@@ -335,7 +328,7 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
                 
-                const type = await vscode.window.showQuickPick(['blog', 'page'], {
+                const type = await vscode.window.showQuickPick(['page', 'post', 'release'], {
                     placeHolder: 'Select content type'
                 });
                 
@@ -408,72 +401,6 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (error: any) {
                 showErrorWithDetails('Failed to show changes', error);
             }   
-        });
-        
-        // Add debug commands
-        // Command: Debug Index
-        const debugIndexCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.debugIndex', async () => {
-            try {
-                if (!checkWorkspace()) {
-                    return;
-                }
-                
-                await indexService.listIndexedFiles();
-                vscode.window.showInformationMessage('Index contents logged. Check the logs for details.');
-            } catch (error: any) {
-                showErrorWithDetails('Failed to list indexed files', error);
-            }
-        });
-        
-        // Command: Mark File as Renamed
-        const markRenamedCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.markRenamed', async () => {
-            try {
-                if (!checkWorkspace()) {
-                    return;
-                }
-                
-                const oldPath = await vscode.window.showInputBox({
-                    prompt: 'Enter original file path (relative to workspace)',
-                    placeHolder: 'media/image.jpg',
-                    validateInput: input => {
-                        return input && input.trim().length > 0 ? null : 'Path is required';
-                    }
-                });
-                
-                if (!oldPath) {
-                    return;
-                }
-                
-                const newPath = await vscode.window.showInputBox({
-                    prompt: 'Enter new file path (relative to workspace)',
-                    placeHolder: 'media/renamed-image.jpg',
-                    validateInput: input => {
-                        return input && input.trim().length > 0 ? null : 'Path is required';
-                    }
-                });
-                
-                if (!newPath) {
-                    return;
-                }
-                
-                // Convert to absolute paths
-                const oldAbsPath = path.join(configService.getWorkspacePath(), oldPath.trim());
-                const newAbsPath = path.join(configService.getWorkspacePath(), newPath.trim());
-                
-                // Check if new file exists
-                if (!(await fs.pathExists(newAbsPath))) {
-                    showError(`New file does not exist: ${newPath}`);
-                    return;
-                }
-                
-                await indexService.markFileRenamed(oldAbsPath, newAbsPath);
-                vscode.window.showInformationMessage(`File marked as renamed: ${oldPath} -> ${newPath}`);
-                
-                // Refresh changes view
-                await contentService.showChanges();
-            } catch (error: any) {
-                showErrorWithDetails('Failed to mark file as renamed', error);
-            }
         });
 
         // Register the unified content validation command
@@ -566,25 +493,6 @@ export function activate(context: vscode.ExtensionContext) {
             }
         });
 
-        // Add a new command to toggle auto-preview mode
-        const toggleAutoPreviewCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.toggleAutoPreview', async () => {
-            try {
-                if (!checkWorkspace()) {
-                    return;
-                }
-                
-                const isEnabled = await previewService.toggleAutoPreview();
-                
-                if (isEnabled) {
-                    vscode.window.showInformationMessage('Auto-preview enabled. Preview will update as you switch between MDX files.');
-                } else {
-                    vscode.window.showInformationMessage('Auto-preview disabled.');
-                }
-            } catch (error: any) {
-                showErrorWithDetails('Failed to toggle auto-preview', error);
-            }
-        });
-
         // Add file change listener for auto-validation
         const fileWatcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(configService.getWorkspacePath(), '{content/**/*.mdx,content/**/*.json}')
@@ -629,13 +537,9 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(newContentCommand);
         context.subscriptions.push(pushContentCommand);
         context.subscriptions.push(showChangesCommand); 
-        context.subscriptions.push(debugIndexCommand);
-        context.subscriptions.push(markRenamedCommand);
-        // Don't push validateMediaCommand here since we want to hide it from the UI
         context.subscriptions.push(previewMdxCommand);
         context.subscriptions.push(configureGatsbyPortCommand);
         context.subscriptions.push(previewInBrowserCommand);
-        context.subscriptions.push(toggleAutoPreviewCommand);
         
         // Add previewService to subscriptions for proper disposal
         context.subscriptions.push({ dispose: () => previewService.dispose() });

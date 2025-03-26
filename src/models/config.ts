@@ -1,6 +1,5 @@
 export interface OnlineSalesConfig {
     domain: string;
-    useLocalMediaReferences?: boolean;
     previewUrls?: Record<string, PreviewUrlConfig>;
 }
 
