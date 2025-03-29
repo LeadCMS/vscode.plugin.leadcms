@@ -737,6 +737,7 @@ export class IndexService {
             if (hashChanged) {
                 mdxEntry.lastSyncedAt = now; // Only update if hash changed
             }
+            // Always update lastModifiedRemote with the server's timestamp
             mdxEntry.lastModifiedRemote = updatedAt;
             mdxEntry.status = FileStatus.SYNCED;
             mdxEntry.lastModifiedLocal = undefined; // Always clear local modification timestamp when synced
@@ -755,7 +756,7 @@ export class IndexService {
                 localPath: mdxRelPath,
                 hash: mdxHash,
                 lastSyncedAt: now, // New entry, set initial sync time
-                lastModifiedRemote: updatedAt,
+                lastModifiedRemote: updatedAt, // Set server timestamp
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [metaRelPath]
             };
@@ -770,6 +771,7 @@ export class IndexService {
             if (hashChanged) {
                 metaEntry.lastSyncedAt = now; // Only update if hash changed
             }
+            // Always update lastModifiedRemote with the server's timestamp
             metaEntry.lastModifiedRemote = updatedAt;
             metaEntry.status = FileStatus.SYNCED;
             metaEntry.lastModifiedLocal = undefined; // Always clear local modification timestamp when synced
@@ -779,7 +781,7 @@ export class IndexService {
                 Logger.info(`Clearing rename history for synced file: ${metaRelPath}`);
                 metaEntry.originalPath = undefined;
                 metaEntry.originalState = undefined;
-                mdxEntry.lastModifiedLocal = undefined;
+                metaEntry.lastModifiedLocal = undefined;
             }
         } else {
             // Create new entry
@@ -789,7 +791,7 @@ export class IndexService {
                 localPath: metaRelPath,
                 hash: metaHash,
                 lastSyncedAt: now, // New entry, set initial sync time
-                lastModifiedRemote: updatedAt,
+                lastModifiedRemote: updatedAt, // Set server timestamp
                 status: FileStatus.SYNCED,
                 relatedEntryIds: [mdxRelPath]
             };
