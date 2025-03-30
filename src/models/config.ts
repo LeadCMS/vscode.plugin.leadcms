@@ -4,7 +4,10 @@ export interface OnlineSalesConfig {
 }
 
 export interface TokenConfig {
-    accessToken: string;
+    email?: string;          // User's email for re-authentication
+    password?: string;       // User's password (optional, for auto re-auth)
+    accessToken: string;     // The JWT token
+    expiration?: string;     // ISO string of when the token expires
 }
 
 /**

@@ -1,5 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
-import * as vscode from 'vscode';
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import { ContentCreateDto, ContentDetailsDto, ContentUpdateDto } from '../models/content';
 import { ConfigService } from './config-service';
 import { Logger } from '../utils/logger';
@@ -10,6 +9,7 @@ import {
     showErrorWithLogsOption,
     handleWorkspaceNotInitializedError
 } from '../utils/ui-helpers';
+import { TokenConfig } from '../models/config';
 
 // The error class for workspace initialization issues
 export class WorkspaceNotInitializedError extends Error {
@@ -30,6 +30,158 @@ export class ApiService {
     // Method to allow ContentService to access ConfigService
     public getConfigService(): ConfigService {
         return this.configService;
+    }
+
+    /**
+     * Login with email and password to get a JWT token
+     */
+    public async login(email: string, password: string, storePassword: boolean = true): Promise<boolean> {
+        try {
+            // Get the config for domain information
+            const config = await this.configService.getConfig();
+            
+            if (!config || !config.domain) {
+                Logger.error('Cannot login: No domain configured');
+                return false;
+            }
+            
+            // Create a temporary client for the login request
+            const baseURL = `${config.domain}/api`;
+            const tempClient = axios.create({
+                baseURL,
+                headers: {
+                    'Accept': '*/*',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            Logger.info(`Attempting to authenticate with email at ${baseURL}/identity/login`);
+            
+            const response = await tempClient.post('/identity/login', {
+                email,
+                password
+            });
+            
+            if (response.data && response.data.token) {
+                Logger.info('Successfully obtained token');
+                
+                const tokenConfig: TokenConfig = {
+                    email, // Store email for future re-authentication
+                    password: storePassword ? password : undefined, // Store password if allowed for auto-refresh
+                    accessToken: response.data.token,
+                    expiration: response.data.expiration
+                };
+                
+                await this.configService.saveToken(tokenConfig);
+                return await this.initialize(); // Re-initialize with the new token
+            } else {
+                Logger.error('Login response did not contain a token', response.data);
+                return false;
+            }
+        } catch (error) {
+            Logger.error('Login failed:', error);
+            showErrorWithDetails('Authentication failed', error);
+            return false;
+        }
+    }
+
+    /**
+     * Check if the current token is about to expire and refresh it if needed
+     */
+    private async refreshTokenIfNeeded(): Promise<boolean> {
+        try {
+            const tokenConfig = await this.configService.getToken();
+            
+            if (!tokenConfig || !tokenConfig.accessToken) {
+                Logger.warn('No token available to refresh');
+                return false;
+            }
+            
+            // Check if token is about to expire (within 5 minutes)
+            if (!tokenConfig.expiration) {
+                return true; // No expiration info, assume it's valid
+            }
+            
+            const expiration = new Date(tokenConfig.expiration);
+            const now = new Date();
+            const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+            
+            // If token is valid and not about to expire, we're good
+            if (expiration > fiveMinutesFromNow) {
+                Logger.info('Token is still valid, no refresh needed');
+                return true;
+            }
+            
+            Logger.info('Token is about to expire, attempting to refresh');
+            
+            // Token is about to expire or has expired, try to refresh
+            if (tokenConfig.email && tokenConfig.password) {
+                Logger.info(`Refreshing token for ${tokenConfig.email}`);
+                return await this.login(tokenConfig.email, tokenConfig.password);
+            } else if (tokenConfig.email) {
+                // We have email but no password - token will expire soon but we can't auto-refresh
+                Logger.warn('Token expiring soon but no password stored for auto-refresh');
+            }
+            
+            return false;
+        } catch (error) {
+            Logger.error('Failed to refresh token:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Ensure API client is initialized with fresh configuration
+     * @throws WorkspaceNotInitializedError if client cannot be initialized
+     * @throws AuthenticationError if workspace is initialized but not authenticated
+     */
+    private async ensureClientInitialized(): Promise<boolean> {
+        try {
+            // Always check if token needs refreshing first before attempting any initialization
+            // This ensures we handle expiring tokens proactively
+            await this.refreshTokenIfNeeded();
+
+            // Try to initialize or re-initialize
+            const initialized = await this.initialize();
+            
+            // First check if workspace is properly initialized
+            if (!initialized) {
+                const config = await this.configService.getConfig();
+                if (!config) {
+                    Logger.error('Workspace not properly initialized: missing config.json');
+                    throw new WorkspaceNotInitializedError('Workspace not initialized. Please initialize your workspace first.');
+                }
+                
+                // If workspace is initialized but we don't have a client,
+                // it's most likely an authentication issue
+                const token = await this.configService.getToken();
+                if (!token || !token.accessToken) {
+                    Logger.error('Authentication required: missing or invalid token');
+                    throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+                }
+                
+                // If we get here, there's some other initialization problem
+                throw new Error('Failed to initialize API client. Check the logs for details.');
+            }
+            
+            // If client is still undefined despite successful initialization,
+            // it's likely an authentication issue
+            if (!this.client) {
+                Logger.error('API client is undefined after successful initialization');
+                throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+            }
+            
+            return true;
+        } catch (error) {
+            // Only rethrow authentication or workspace errors
+            if (error instanceof AuthenticationError || error instanceof WorkspaceNotInitializedError) {
+                throw error;
+            }
+            
+            // For other errors, log and still allow the check to fail
+            Logger.error('Error in ensureClientInitialized:', error);
+            return false;
+        }
     }
 
     /**
@@ -54,12 +206,9 @@ export class ApiService {
             // Now check for token
             const tokenConfig = await this.configService.getToken();
             
-            // If no token, that's okay - we don't return false here to distinguish
-            // between "workspace not initialized" and "not authenticated"
             if (!tokenConfig || !tokenConfig.accessToken) {
                 Logger.warn('No authentication token found. Will prompt for authentication.');
-                // Return true because workspace is initialized, we just need auth
-                return true; 
+                return false; 
             }
 
             const baseURL = `${config.domain}/api`;
@@ -93,12 +242,24 @@ export class ApiService {
             return;
         }
         
-        // Add request interceptor for logging
+        // Add request interceptor for logging and token refresh
         this.client.interceptors.request.use(
-            (config) => {
+            async (config) => {
                 const method = config.method?.toUpperCase() || 'UNKNOWN';
                 const url = config.url || 'UNKNOWN';
                 const fullUrl = config.baseURL ? `${config.baseURL}${url}` : url;
+                
+                // Check if token needs refreshing before each request
+                const tokenRefreshed = await this.refreshTokenIfNeeded();
+                if (tokenRefreshed) {
+                    // If token was refreshed, update the Authorization header
+                    const freshToken = await this.configService.getToken();
+                    if (freshToken && freshToken.accessToken) {
+                        config.headers = config.headers || {};
+                        config.headers['Authorization'] = `Bearer ${freshToken.accessToken}`;
+                        Logger.info('Updated request with fresh token');
+                    }
+                }
                 
                 Logger.apiRequest(method, fullUrl, config.data);
                 return config;
@@ -119,7 +280,7 @@ export class ApiService {
                 Logger.apiResponse(fullUrl, status, response.data);
                 return response;
             },
-            (error) => {
+            async (error) => {
                 if (axios.isAxiosError(error) && error.response) {
                     const status = error.response.status;
                     const url = error.config?.url || 'UNKNOWN';
@@ -130,51 +291,45 @@ export class ApiService {
                         data: error.response.data,
                         message: error.message
                     });
+                    
+                    // Handle 401 Unauthorized by attempting to refresh the token
+                    if (status === 401 && error.config) {
+                        Logger.info('Received 401, attempting to refresh token');
+                        
+                        // Get the token config
+                        const tokenConfig = await this.configService.getToken();
+                        
+                        if (tokenConfig?.email && tokenConfig?.password) {
+                            try {
+                                // Try to log in again
+                                const refreshed = await this.login(tokenConfig.email, tokenConfig.password);
+                                
+                                if (refreshed) {
+                                    // Get fresh token
+                                    const freshToken = await this.configService.getToken();
+                                    
+                                    if (freshToken) {
+                                        // Update the Authorization header
+                                        const newConfig: AxiosRequestConfig = { ...error.config };
+                                        newConfig.headers = { ...newConfig.headers };
+                                        newConfig.headers['Authorization'] = `Bearer ${freshToken.accessToken}`;
+                                        
+                                        // Retry the original request with the new token
+                                        Logger.info('Retrying request with new token');
+                                        return this.client!(newConfig);
+                                    }
+                                }
+                            } catch (refreshError) {
+                                Logger.error('Token refresh failed:', refreshError);
+                            }
+                        }
+                    }
                 } else {
                     Logger.error('Non-Axios API error', error);
                 }
                 return Promise.reject(error);
             }
         );
-    }
-
-    /**
-     * Ensure API client is initialized with fresh configuration
-     * @throws WorkspaceNotInitializedError if client cannot be initialized
-     * @throws AuthenticationError if workspace is initialized but not authenticated
-     */
-    private async ensureClientInitialized(): Promise<boolean> {
-        // Always reinitialize the client to get fresh config
-        const initialized = await this.initialize();
-        
-        // First check if workspace is properly initialized
-        if (!initialized) {
-            const config = await this.configService.getConfig();
-            if (!config) {
-                Logger.error('Workspace not properly initialized: missing config.json');
-                throw new WorkspaceNotInitializedError('Workspace not initialized. Please initialize your workspace first.');
-            }
-            
-            // If workspace is initialized but we don't have a client,
-            // it's most likely an authentication issue
-            const token = await this.configService.getToken();
-            if (!token || !token.accessToken) {
-                Logger.error('Authentication required: missing or invalid token');
-                throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
-            }
-            
-            // If we get here, there's some other initialization problem
-            throw new Error('Failed to initialize API client. Check the logs for details.');
-        }
-        
-        // If client is still undefined despite successful initialization,
-        // it's likely an authentication issue
-        if (!this.client) {
-            Logger.error('API client is undefined after successful initialization');
-            throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
-        }
-        
-        return true;
     }
 
     public async exportContent(): Promise<ContentDetailsDto[]> {

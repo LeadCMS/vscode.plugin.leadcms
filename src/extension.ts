@@ -220,31 +220,72 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
                 
-                const token = await vscode.window.showInputBox({
-                    prompt: 'Enter your OnlineSales access token',
-                    password: true,
+                // Get email
+                const email = await vscode.window.showInputBox({
+                    prompt: 'Enter your OnlineSales email',
+                    placeHolder: 'email@example.com',
                     validateInput: input => {
-                        return input && input.trim().length > 0 ? null : 'Access token is required';
+                        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                        return input && emailRegex.test(input) ? null : 'Please enter a valid email address';
                     }
                 });
                 
-                if (!token) {
-                    showError('Access token is required for authentication.');
+                if (!email) {
+                    showError('Email is required for authentication.');
                     return;
                 }
                 
-                const tokenConfig: TokenConfig = {
-                    accessToken: token.trim()
-                };
-
-                await configService.saveToken(tokenConfig);
-                const isInitialized = await apiService.initialize();
+                // Get password
+                const password = await vscode.window.showInputBox({
+                    prompt: 'Enter your OnlineSales password',
+                    password: true, // Hide input
+                    validateInput: input => {
+                        return input && input.trim().length > 0 ? null : 'Password is required';
+                    }
+                });
                 
-                if (isInitialized) {
-                    vscode.window.showInformationMessage('Authentication successful.');
-                } else {
-                    showError('Failed to authenticate with OnlineSales API.');
+                if (!password) {
+                    showError('Password is required for authentication.');
+                    return;
                 }
+                
+                // Ask if user wants to save password for auto-refresh - default to Yes for better experience
+                const savePassword = await vscode.window.showQuickPick(
+                    ['Yes, store password and allow auto-refresh (recommended)', 'No, prompt me when token expires'], 
+                    { 
+                        placeHolder: 'Save password for automatic token refresh?',
+                        canPickMany: false
+                    }
+                );
+                
+                const storePassword = savePassword !== 'No, prompt me when token expires'; // Default to yes if dialog is dismissed
+                
+                // Show progress during login
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: "Authenticating with OnlineSales...",
+                    cancellable: false
+                }, async (progress) => {
+                    progress.report({ increment: 50 });
+                    
+                    // Perform login with proper password storage parameter
+                    const isAuthenticated = await apiService.login(email, password, storePassword);
+                    
+                    if (isAuthenticated) {
+                        progress.report({ increment: 50 });
+                        
+                        let message = 'Authentication successful.';
+                        if (storePassword) {
+                            message += ' Password stored for automatic token refresh.';
+                        } else {
+                            message += ' You will be prompted when token expires.';
+                        }
+                        
+                        vscode.window.showInformationMessage(message);
+                    } else {
+                        throw new Error('Failed to authenticate. Please check your credentials.');
+                    }
+                });
             } catch (error: any) {
                 showErrorWithDetails('Authentication failed', error);
             }
