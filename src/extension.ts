@@ -11,6 +11,8 @@ import { IndexService } from './services/index-service';
 import { FileWatcherService } from './services/file-watcher-service';
 import { GatsbyService } from './services/gatsby-service';
 import { PreviewService } from './services/preview-service';
+import * as fs from 'fs-extra';
+import * as path from 'path';
 import { 
     showError, 
     showErrorWithDetails, 
@@ -568,6 +570,73 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (error: any) {
                 showErrorWithDetails('Failed to configure Gatsby port', error);
             }
+        });
+
+        // Add a new command to reset for new CMS instance
+        const resetForNewInstanceCommand = vscode.commands.registerCommand('leadcms-vs-plugin.resetForNewInstance', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                vscode.window.showErrorMessage('No workspace folder open.');
+                return;
+            }
+            const workspacePath = workspaceFolders[0].uri.fsPath;
+            const contentDir = path.join(workspacePath, 'content');
+            const indexPath = path.join(workspacePath, '.leadcms', 'content-index.json');
+            // 1. Remove id and publishedAt from all .json files
+            let jsonFiles: string[] = [];
+            const findJsonFiles = async (dir: string) => {
+                const entries = await fs.readdir(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        await findJsonFiles(fullPath);
+                    } else if (entry.isFile() && entry.name.endsWith('.json')) {
+                        jsonFiles.push(fullPath);
+                    }
+                }
+            };
+            await findJsonFiles(contentDir);
+            for (const file of jsonFiles) {
+                try {
+                    const data = await fs.readJson(file);
+                    let changed = false;
+                    if ('id' in data) {
+                        delete data.id;
+                        changed = true;
+                    }
+                    if ('publishedAt' in data) {
+                        delete data.publishedAt;
+                        changed = true;
+                    }
+                    if (changed) {
+                        await fs.writeJson(file, data, { spaces: 2 });
+                    }
+                } catch (err) {
+                    // Ignore parse errors
+                }
+            }
+            // 2. Reset status in content-index.json
+            if (await fs.pathExists(indexPath)) {
+                const index = await fs.readJson(indexPath);
+                let changed = false;
+                for (const [relPath, entryRaw] of Object.entries(index.entries || {})) {
+                    const entry = entryRaw as any;
+                    if (relPath.endsWith('.json') || relPath.endsWith('.mdx')) {
+                        if (entry.status !== 'new' || entry.id !== `local:${relPath}` || entry.lastModifiedRemote) {
+                            entry.status = 'new';
+                            entry.lastModifiedLocal = new Date();
+                            entry.id = `local:${relPath}`;
+                            delete entry.lastModifiedRemote;
+                            delete entry.lastSyncedAt;
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed) {
+                    await fs.writeJson(indexPath, index, { spaces: 2 });
+                }
+            }
+            vscode.window.showInformationMessage('All content reset for new CMS instance.');
         });
 
         // Register all commands
