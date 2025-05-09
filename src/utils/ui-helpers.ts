@@ -63,7 +63,7 @@ export async function handleAuthenticationError(error: Error): Promise<void> {
     );
     
     if (action === 'Re-authenticate') {
-        vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
+        vscode.commands.executeCommand('leadcms-vs-plugin.authenticate');
     } else if (action === 'View Logs') {
         Logger.show();
     }
@@ -90,7 +90,7 @@ export function showValidationError(message: string): Thenable<string | undefine
  * Shows a workspace requirement error
  */
 export function showWorkspaceRequiredError(): Thenable<string | undefined> {
-    return vscode.window.showErrorMessage('OnlineSales: This command requires an open workspace. Please open a folder first.');
+    return vscode.window.showErrorMessage('LeadCMS: This command requires an open workspace. Please open a folder first.');
 }
 
 /**
@@ -98,7 +98,7 @@ export function showWorkspaceRequiredError(): Thenable<string | undefined> {
  */
 export function showActivationError(error: any): Thenable<string | undefined> {
     Logger.error('Error during extension activation', error);
-    return vscode.window.showErrorMessage('Failed to activate OnlineSales CMS extension. See logs for details.');
+    return vscode.window.showErrorMessage('Failed to activate LeadCMS CMS extension. See logs for details.');
 }
 
 /**
@@ -113,7 +113,7 @@ export async function handleWorkspaceNotInitializedError(): Promise<boolean> {
     
     if (action === 'Initialize Workspace') {
         // Execute the initialize workspace command
-        await vscode.commands.executeCommand('onlinesales-vs-plugin.initializeWorkspace');
+        await vscode.commands.executeCommand('leadcms-vs-plugin.initializeWorkspace');
         return true;
     }
     return false;

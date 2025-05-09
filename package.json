@@ -1,6 +1,6 @@
 {
-  "name": "onlinesales-vs-plugin",
-  "displayName": "OnlineSales CMS",
+  "name": "leadcms-vs-plugin",
+  "displayName": "LeadCMS CMS",
   "description": "Edit and publish contents of your website with the full power of VSCode and Copilot.",
   "version": "0.0.1",
   "engines": {
@@ -16,59 +16,59 @@
   "contributes": {
     "commands": [
       {
-        "command": "onlinesales-vs-plugin.initializeWorkspace",
-        "title": "OnlineSales: Initialize Workspace"
+        "command": "leadcms-vs-plugin.initializeWorkspace",
+        "title": "LeadCMS: Initialize Workspace"
       },
       {
-        "command": "onlinesales-vs-plugin.authenticate",
-        "title": "OnlineSales: Authenticate"
+        "command": "leadcms-vs-plugin.authenticate",
+        "title": "LeadCMS: Authenticate"
       },
       {
-        "command": "onlinesales-vs-plugin.pullContent",
-        "title": "OnlineSales: Pull Content"
+        "command": "leadcms-vs-plugin.pullContent",
+        "title": "LeadCMS: Pull Content"
       },
       {
-        "command": "onlinesales-vs-plugin.newContent",
-        "title": "OnlineSales: New Content"
+        "command": "leadcms-vs-plugin.newContent",
+        "title": "LeadCMS: New Content"
       },
       {
-        "command": "onlinesales-vs-plugin.pushContent",
-        "title": "OnlineSales: Push Content"
+        "command": "leadcms-vs-plugin.pushContent",
+        "title": "LeadCMS: Push Content"
       },
       {
-        "command": "onlinesales-vs-plugin.showLogs",
-        "title": "OnlineSales: Show Logs"
+        "command": "leadcms-vs-plugin.showLogs",
+        "title": "LeadCMS: Show Logs"
       },
       {
-        "command": "onlinesales-vs-plugin.showChanges",
-        "title": "OnlineSales: Show Changes"
+        "command": "leadcms-vs-plugin.showChanges",
+        "title": "LeadCMS: Show Changes"
       },
       {
-        "command": "onlinesales-vs-plugin.debugIndex",
-        "title": "OnlineSales: Debug - List Indexed Files"
+        "command": "leadcms-vs-plugin.debugIndex",
+        "title": "LeadCMS: Debug - List Indexed Files"
       },
       {
-        "command": "onlinesales-vs-plugin.markRenamed",
-        "title": "OnlineSales: Mark File as Renamed"
+        "command": "leadcms-vs-plugin.markRenamed",
+        "title": "LeadCMS: Mark File as Renamed"
       },
       {
-        "command": "onlinesales.validateContent",
-        "title": "OnlineSales: Validate Content"
+        "command": "leadcms.validateContent",
+        "title": "LeadCMS: Validate Content"
       },
       {
-        "command": "onlinesales-vs-plugin.previewMDX",
-        "title": "OnlineSales: Preview MDX"
+        "command": "leadcms-vs-plugin.previewMDX",
+        "title": "LeadCMS: Preview MDX"
       },
       {
-        "command": "onlinesales-vs-plugin.configureGatsbyPort",
-        "title": "OnlineSales: Configure Gatsby Port"
+        "command": "leadcms-vs-plugin.configureGatsbyPort",
+        "title": "LeadCMS: Configure Gatsby Port"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "onlinesales.validateContent",
-          "group": "onlinesales",
+          "command": "leadcms.validateContent",
+          "group": "leadcms",
           "when": "resourceExtname == .mdx || resourceExtname == .json"
         }
       ]

@@ -54,7 +54,7 @@ export class MetadataValidator implements Validator {
                     message: `Invalid JSON: ${(jsonError as Error).message}`,
                     range: new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0)),
                     severity: ValidationSeverity.Error,
-                    source: 'OnlineSales'
+                    source: 'LeadCMS'
                 });
                 return { problems };
             }
@@ -71,7 +71,7 @@ export class MetadataValidator implements Validator {
                             message: `Missing required file: ${path.basename(mdxPath)}`,
                             range: new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0)),
                             severity: ValidationSeverity.Error,
-                            source: 'OnlineSales'
+                            source: 'LeadCMS'
                         });
                     } else {
                         const mdxContent = await fs.readFile(mdxPath, 'utf8');
@@ -81,7 +81,7 @@ export class MetadataValidator implements Validator {
                                 message: 'Body content is empty',
                                 range: new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0)),
                                 severity: ValidationSeverity.Error,
-                                source: 'OnlineSales'
+                                source: 'LeadCMS'
                             });
                         }
                     }
@@ -100,7 +100,7 @@ export class MetadataValidator implements Validator {
                         message: `Missing required field: ${field}`,
                         range: fieldRange,
                         severity: ValidationSeverity.Error,
-                        source: 'OnlineSales'
+                        source: 'LeadCMS'
                     });
                 }
             }

@@ -163,7 +163,7 @@ export class MediaValidator implements Validator {
                     message: `Media file not found: ${path.basename(localFilePath)}`,
                     range,
                     severity: ValidationSeverity.Warning,
-                    source: 'OnlineSales'
+                    source: 'LeadCMS'
                 });
             }
         }

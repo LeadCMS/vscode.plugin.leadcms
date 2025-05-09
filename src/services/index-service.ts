@@ -28,7 +28,7 @@ export class IndexService {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
             this.workspacePath = workspaceFolders[0].uri.fsPath;
-            this.indexFilePath = path.join(this.workspacePath, '.onlinesales', 'content-index.json');
+            this.indexFilePath = path.join(this.workspacePath, '.leadcms', 'content-index.json');
             
             // Set up file watcher for the index file
             this.setupIndexFileWatcher();

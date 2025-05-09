@@ -1,12 +1,10 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs-extra';
 import { ConfigService } from './services/config-service';
 import { ApiService } from './services/api-service';
 import { ContentService } from './services/content-service';
 import { MediaService } from './services/media-service';
 import { GitService } from './services/git-service';
-import { OnlineSalesConfig, TokenConfig } from './models/config';
+import { LeadCMSConfig, TokenConfig } from './models/config';
 import { Logger } from './utils/logger';
 import { AuthenticationError } from './utils/errors';
 import { IndexService } from './services/index-service';
@@ -30,7 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
     Logger.init();
     
     // Log activation with more details
-    Logger.info('Activating OnlineSales CMS extension...');
+    Logger.info('Activating LeadCMS CMS extension...');
     
     try {
         const configService = new ConfigService();
@@ -80,12 +78,12 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // Command: Show Logs
-        const showLogsCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showLogs', () => {
+        const showLogsCommand = vscode.commands.registerCommand('leadcms-vs-plugin.showLogs', () => {
             Logger.show();
         });
 
         // Command: Initialize Workspace
-        const initializeWorkspaceCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.initializeWorkspace', async () => {
+        const initializeWorkspaceCommand = vscode.commands.registerCommand('leadcms-vs-plugin.initializeWorkspace', async () => {
             try {
                 Logger.info('Executing initialize workspace command...');
                 
@@ -94,8 +92,8 @@ export function activate(context: vscode.ExtensionContext) {
                 }
                 
                 const domain = await vscode.window.showInputBox({
-                    prompt: 'Enter OnlineSales instance domain (e.g., https://cms.onlinesales.tech)',
-                    placeHolder: 'https://cms.onlinesales.tech',
+                    prompt: 'Enter LeadCMS instance domain (e.g., https://cms.leadcms.ai)',
+                    placeHolder: 'https://cms.leadcms.ai',
                     validateInput: input => {
                         return input && input.trim().length > 0 ? null : 'Domain is required';
                     }
@@ -106,7 +104,7 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
                 
-                const config: OnlineSalesConfig = {
+                const config: LeadCMSConfig = {
                     domain: domain.trim(),
                     // Add default preview URL patterns for common content types
                     previewUrls: {
@@ -125,7 +123,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // Show progress during initialization
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: 'Initializing OnlineSales workspace...',
+                    title: 'Initializing LeadCMS workspace...',
                     cancellable: false
                 }, async (progress) => {
                     // Step 1: Save config and create directory structure
@@ -207,14 +205,14 @@ export function activate(context: vscode.ExtensionContext) {
                     context.subscriptions.push({ dispose: () => fileWatcherService?.dispose() });
                 }
                 
-                vscode.window.showInformationMessage('OnlineSales workspace initialized successfully.');
+                vscode.window.showInformationMessage('LeadCMS workspace initialized successfully.');
             } catch (error: any) {
                 showErrorWithDetails('Failed to initialize workspace', error);
             }
         });
         
         // Command: Authenticate
-        const authenticateCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.authenticate', async () => {
+        const authenticateCommand = vscode.commands.registerCommand('leadcms-vs-plugin.authenticate', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -222,7 +220,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 // Get email
                 const email = await vscode.window.showInputBox({
-                    prompt: 'Enter your OnlineSales email',
+                    prompt: 'Enter your LeadCMS email',
                     placeHolder: 'email@example.com',
                     validateInput: input => {
                         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -237,7 +235,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 // Get password
                 const password = await vscode.window.showInputBox({
-                    prompt: 'Enter your OnlineSales password',
+                    prompt: 'Enter your LeadCMS password',
                     password: true, // Hide input
                     validateInput: input => {
                         return input && input.trim().length > 0 ? null : 'Password is required';
@@ -263,7 +261,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // Show progress during login
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: "Authenticating with OnlineSales...",
+                    title: "Authenticating with LeadCMS...",
                     cancellable: false
                 }, async (progress) => {
                     progress.report({ increment: 50 });
@@ -292,7 +290,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         // Command: Pull Content
-        const pullContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.pullContent', async () => {
+        const pullContentCommand = vscode.commands.registerCommand('leadcms-vs-plugin.pullContent', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -317,7 +315,7 @@ export function activate(context: vscode.ExtensionContext) {
                     
                     if (response === 'Authenticate Now') {
                         // Call the authenticate command
-                        await vscode.commands.executeCommand('onlinesales-vs-plugin.authenticate');
+                        await vscode.commands.executeCommand('leadcms-vs-plugin.authenticate');
                         return;
                     }
                     return;
@@ -326,7 +324,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // Show progress indicator
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: "Pulling content from OnlineSales CMS...",
+                    title: "Pulling content from LeadCMS CMS...",
                     cancellable: false
                 }, async (progress) => {
                     progress.report({ increment: 0 });
@@ -366,7 +364,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         // Command: New Content
-        const newContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.newContent', async () => {
+        const newContentCommand = vscode.commands.registerCommand('leadcms-vs-plugin.newContent', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -416,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         // Command: Push Content
-        const pushContentCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.pushContent', async () => {
+        const pushContentCommand = vscode.commands.registerCommand('leadcms-vs-plugin.pushContent', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -435,7 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         // Add a new command to show pending changes
-        const showChangesCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.showChanges', async () => {
+        const showChangesCommand = vscode.commands.registerCommand('leadcms-vs-plugin.showChanges', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -448,7 +446,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
 
         // Register the unified content validation command
-        const validateContentCommand = vscode.commands.registerCommand('onlinesales.validateContent', async () => {
+        const validateContentCommand = vscode.commands.registerCommand('leadcms.validateContent', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -483,15 +481,15 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(validateContentCommand);
 
         // Keep the old command for backward compatibility, but it won't appear in UI
-        const validateMediaCommand = vscode.commands.registerCommand('onlinesales.validateMedia', async () => {
+        const validateMediaCommand = vscode.commands.registerCommand('leadcms.validateMedia', async () => {
             // Just redirect to the unified command
-            vscode.commands.executeCommand('onlinesales.validateContent');
+            vscode.commands.executeCommand('leadcms.validateContent');
         });
 
         context.subscriptions.push(validateMediaCommand);
 
         // Command: Preview MDX
-        const previewMdxCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.previewMDX', async () => {
+        const previewMdxCommand = vscode.commands.registerCommand('leadcms-vs-plugin.previewMDX', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -504,7 +502,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         // Add a new command to open preview in browser
-        const previewInBrowserCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.previewInBrowser', async () => {
+        const previewInBrowserCommand = vscode.commands.registerCommand('leadcms-vs-plugin.previewInBrowser', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -553,7 +551,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(fileWatcher);
         
         // Add a new command to reconfigure Gatsby port
-        const configureGatsbyPortCommand = vscode.commands.registerCommand('onlinesales-vs-plugin.configureGatsbyPort', async () => {
+        const configureGatsbyPortCommand = vscode.commands.registerCommand('leadcms-vs-plugin.configureGatsbyPort', async () => {
             try {
                 if (!checkWorkspace()) {
                     return;
@@ -590,10 +588,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Only show the ready notification if we have a workspace
         if (configService.hasWorkspace()) {
-            vscode.window.showInformationMessage('OnlineSales CMS extension is now ready.');
+            vscode.window.showInformationMessage('LeadCMS CMS extension is now ready.');
         }
         
-        Logger.info('OnlineSales CMS extension successfully activated!');
+        Logger.info('LeadCMS CMS extension successfully activated!');
     } catch (error) {
         showActivationError(error);
     }
@@ -606,5 +604,5 @@ export function deactivate() {
         indexService = undefined;
     }
     
-    Logger.info('OnlineSales CMS extension deactivated');
+    Logger.info('LeadCMS CMS extension deactivated');
 }

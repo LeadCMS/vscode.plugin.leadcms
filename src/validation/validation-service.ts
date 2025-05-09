@@ -17,7 +17,7 @@ export class ValidationService {
     
     constructor(workspacePath: string | undefined) {
         this.workspacePath = workspacePath;
-        this.diagnosticCollection = vscode.languages.createDiagnosticCollection('onlinesales');
+        this.diagnosticCollection = vscode.languages.createDiagnosticCollection('leadcms');
         
         // Register all validators
         this.validators.push(new MediaValidator(workspacePath));
@@ -135,7 +135,7 @@ export class ValidationService {
                     this.mapSeverity(problem.severity)
                 );
                 
-                diagnostic.source = problem.source || 'OnlineSales';
+                diagnostic.source = problem.source || 'LeadCMS';
                 
                 // Group diagnostics by file
                 if (!fileDiagnosticsMap.has(problem.filePath)) {

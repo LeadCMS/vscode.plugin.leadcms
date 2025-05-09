@@ -1,5 +1,5 @@
-# OnlineSales CMS specific
-.onlinesales/token.json
+# LeadCMS CMS specific
+.leadcms/token.json
 
 # IDE - VSCode
 .vscode/*

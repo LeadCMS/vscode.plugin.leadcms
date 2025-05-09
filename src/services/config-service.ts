@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { OnlineSalesConfig, TokenConfig } from '../models/config';
+import { LeadCMSConfig, TokenConfig } from '../models/config';
 import { UserSettings } from '../models/user-settings';
 import { Logger } from '../utils/logger';
 
@@ -12,10 +12,10 @@ export class ConfigService {
     private fileWatchers: vscode.Disposable[] = [];
     
     // Settings key for Gatsby path in VS Code settings
-    private readonly GATSBY_PATH_SETTING = 'onlinesalesCms.gatsbyPath';
+    private readonly GATSBY_PATH_SETTING = 'leadcmsCms.gatsbyPath';
     
     // Add setting key for Gatsby port
-    private readonly GATSBY_PORT_SETTING = 'onlinesalesCms.gatsbyPort';
+    private readonly GATSBY_PORT_SETTING = 'leadcmsCms.gatsbyPort';
     
     constructor() {
         this.initialize();
@@ -26,8 +26,8 @@ export class ConfigService {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
             this.workspaceRoot = workspaceFolders[0].uri.fsPath;
-            this.configPath = path.join(this.workspaceRoot, '.onlinesales', 'config.json');
-            this.tokenPath = path.join(this.workspaceRoot, '.onlinesales', 'token.json');
+            this.configPath = path.join(this.workspaceRoot, '.leadcms', 'config.json');
+            this.tokenPath = path.join(this.workspaceRoot, '.leadcms', 'token.json');
             
             // Set up file watchers to log when config files change
             this.setupFileWatchers();
@@ -46,7 +46,7 @@ export class ConfigService {
             try {
                 // Watch for changes to the config file
                 const configWatcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(this.workspaceRoot, '.onlinesales/config.json')
+                    new vscode.RelativePattern(this.workspaceRoot, '.leadcms/config.json')
                 );
                 
                 configWatcher.onDidChange(() => {
@@ -66,7 +66,7 @@ export class ConfigService {
                 
                 // Watch for changes to the token file
                 const tokenWatcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(this.workspaceRoot, '.onlinesales/token.json')
+                    new vscode.RelativePattern(this.workspaceRoot, '.leadcms/token.json')
                 );
                 
                 tokenWatcher.onDidChange(() => {
@@ -110,7 +110,7 @@ export class ConfigService {
     public async ensureDirectoriesExist(): Promise<void> {
         this.ensureWorkspaceExists();
         
-        await fs.ensureDir(path.join(this.workspaceRoot!, '.onlinesales'));
+        await fs.ensureDir(path.join(this.workspaceRoot!, '.leadcms'));
         await fs.ensureDir(path.join(this.workspaceRoot!, 'content'));
     }
 
@@ -118,7 +118,7 @@ export class ConfigService {
      * Get the current configuration from file
      * Always reads from the file system to ensure fresh values
      */
-    public async getConfig(): Promise<OnlineSalesConfig | undefined> {
+    public async getConfig(): Promise<LeadCMSConfig | undefined> {
         if (!this.configPath) {
             return undefined;
         }
@@ -126,7 +126,7 @@ export class ConfigService {
         try {
             if (await fs.pathExists(this.configPath)) {
                 const configData = await fs.readFile(this.configPath, 'utf8');
-                return JSON.parse(configData) as OnlineSalesConfig;
+                return JSON.parse(configData) as LeadCMSConfig;
             }
         } catch (error) {
             Logger.error('Failed to read config file:', error);
@@ -135,7 +135,7 @@ export class ConfigService {
         return undefined;
     }
 
-    public async saveConfig(config: OnlineSalesConfig): Promise<void> {
+    public async saveConfig(config: LeadCMSConfig): Promise<void> {
         this.ensureWorkspaceExists();
         
         await this.ensureDirectoriesExist();
@@ -398,5 +398,17 @@ export class ConfigService {
             throw new Error('No workspace folder found. Please open a folder first.');
         }
         return this.workspaceRoot;
+    }
+
+    /**
+     * Checks if the workspace has been initialized with .leadcms/config.json
+     */
+    public isWorkspaceInitialized(): boolean {
+        if (!this.hasWorkspace()) {
+            return false;
+        }
+        
+        const configPath = path.join(this.getWorkspacePath(), '.leadcms', 'config.json');
+        return fs.existsSync(configPath);
     }
 }

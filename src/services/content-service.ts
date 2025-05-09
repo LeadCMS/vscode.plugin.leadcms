@@ -1145,7 +1145,7 @@ export class ContentService {
             }
             
             // Show the changes in an output channel
-            const outputChannel = vscode.window.createOutputChannel('OnlineSales Changes');
+            const outputChannel = vscode.window.createOutputChannel('LeadCMS Changes');
             outputChannel.clear();
             outputChannel.appendLine(changeMessage);
             outputChannel.show();

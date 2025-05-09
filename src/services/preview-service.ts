@@ -117,7 +117,7 @@ export class PreviewService {
                 const previewUrl = await this.gatsbyService.generatePreviewUrl(mdxFilePath!);
                 if (!previewUrl) {
                     vscode.window.showErrorMessage(
-                        'Failed to generate preview URL. Please check your OnlineSales configuration.'
+                        'Failed to generate preview URL. Please check your LeadCMS configuration.'
                     );
                     return;
                 }

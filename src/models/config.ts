@@ -1,4 +1,4 @@
-export interface OnlineSalesConfig {
+export interface LeadCMSConfig {
     domain: string;
     previewUrls?: Record<string, PreviewUrlConfig>;
 }

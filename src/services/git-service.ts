@@ -83,7 +83,7 @@ export class GitService {
             
             // Add all files and make initial commit
             await this.git!.add('.');
-            await this.git!.commit('Initial commit with OnlineSales CMS setup');
+            await this.git!.commit('Initial commit with LeadCMS CMS setup');
             console.log('Initial commit created');
             
             return true;
@@ -113,7 +113,7 @@ export class GitService {
                 if (await fs.pathExists(gitIgnorePath)) {
                     // Append our entries to the existing file if they don't exist
                     const existingContent = await fs.readFile(gitIgnorePath, 'utf8');
-                    if (!existingContent.includes('# OnlineSales CMS specific')) {
+                    if (!existingContent.includes('# LeadCMS CMS specific')) {
                         await fs.writeFile(
                             gitIgnorePath, 
                             existingContent + '\n\n' + templateContent,
@@ -142,8 +142,8 @@ export class GitService {
      * Fallback gitignore content if template is not available
      */
     private getDefaultGitIgnoreContent(): string {
-        return `# OnlineSales CMS specific
-.onlinesales/token.json
+        return `# LeadCMS CMS specific
+.leadcms/token.json
 
 # IDE - VSCode
 .vscode/*
@@ -162,7 +162,7 @@ Thumbs.db
     }
 
     /**
-     * Append OnlineSales-specific entries to an existing .gitignore content
+     * Append LeadCMS-specific entries to an existing .gitignore content
      */
     private appendGitIgnoreEntries(existingContent: string): string {
         const entries = this.getGitIgnoreEntries();
@@ -177,7 +177,7 @@ Thumbs.db
         
         // Add a section header if we had to add entries
         if (existingContent !== existingLines.join('\n')) {
-            existingContent += '\n\n# OnlineSales CMS specific\n';
+            existingContent += '\n\n# LeadCMS CMS specific\n';
         }
         
         return existingContent;
@@ -188,8 +188,8 @@ Thumbs.db
      */
     private getGitIgnoreEntries(): string[] {
         return [
-            '# OnlineSales specific',
-            '.onlinesales/token.json',   // Contains sensitive authentication tokens
+            '# LeadCMS specific',
+            '.leadcms/token.json',   // Contains sensitive authentication tokens
             '*.log',
             
             // IDE specific files
@@ -225,6 +225,6 @@ Thumbs.db
      */
     private getDefaultGitIgnore(): string {
         const entries = this.getGitIgnoreEntries();
-        return '# OnlineSales CMS gitignore\n' + entries.join('\n');
+        return '# LeadCMS CMS gitignore\n' + entries.join('\n');
     }
 }

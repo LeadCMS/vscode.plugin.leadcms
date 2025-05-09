@@ -68,17 +68,6 @@ export class ContentValidator implements Validator {
                         source: 'Content Validator'
                     });
                 }
-                
-                // Check for proper markdown structure (at least one heading)
-                if (!content.match(/^#+ /m)) {
-                    problems.push({
-                        filePath,
-                        message: 'Content should include at least one heading (# Title)',
-                        range: new vscode.Range(0, 0, 0, 0),
-                        severity: ValidationSeverity.Warning,
-                        source: 'Content Validator'
-                    });
-                }
             }
         } catch (error) {
             Logger.error(`Error validating content in file ${filePath}:`, error);

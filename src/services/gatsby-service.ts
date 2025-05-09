@@ -12,8 +12,8 @@ export class GatsbyService {
     private port: number = 8000; // Default port
 
     // Settings keys
-    private readonly GATSBY_PATH_SETTING = 'onlinesalesCms.gatsbyPath';
-    private readonly GATSBY_PORT_SETTING = 'onlinesalesCms.gatsbyPort';
+    private readonly GATSBY_PATH_SETTING = 'leadcmsCms.gatsbyPath';
+    private readonly GATSBY_PORT_SETTING = 'leadcmsCms.gatsbyPort';
 
     constructor(private configService: ConfigService) {
         this.initializePort();
@@ -485,7 +485,7 @@ export class GatsbyService {
                         type: 'chrome',
                         request: 'launch',
                         name: 'Launch Gatsby Preview',
-                        url: `http://localhost:{config:onlinesalesCms.gatsbyPort}`,
+                        url: `http://localhost:{config:leadcmsCms.gatsbyPort}`,
                         webRoot: '${workspaceFolder}',
                         preLaunchTask: 'start-gatsby-server'
                     }
@@ -505,7 +505,7 @@ export class GatsbyService {
                     {
                         label: 'start-gatsby-server',
                         type: 'shell',
-                        command: `cd "\${config:onlinesalesCms.gatsbyPath}" && git pull && nvm use && npm install && GATSBY_CONTENT_PATH="\${workspaceFolder}" PORT=\${config:onlinesalesCms.gatsbyPort} npm run start`,
+                        command: `cd "\${config:leadcmsCms.gatsbyPath}" && git pull && nvm use && npm install && GATSBY_CONTENT_PATH="\${workspaceFolder}" PORT=\${config:leadcmsCms.gatsbyPort} npm run start`,
                         isBackground: true,
                         problemMatcher: {
                             pattern: {
@@ -520,7 +520,7 @@ export class GatsbyService {
                         options: {
                             env: {
                                 GATSBY_CONTENT_PATH: '${workspaceFolder}',
-                                PORT: `{config:onlinesalesCms.gatsbyPort}`
+                                PORT: `{config:leadcmsCms.gatsbyPort}`
                             }
                         }
                     }

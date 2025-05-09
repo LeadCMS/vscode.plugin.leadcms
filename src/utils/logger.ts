@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
- * Logger class for OnlineSales VS plugin
+ * Logger class for LeadCMS VS plugin
  */
 export class Logger {
     private static outputChannel: vscode.OutputChannel | undefined;
@@ -14,7 +14,7 @@ export class Logger {
      */
     public static init(): void {
         if (!this.outputChannel) {
-            this.outputChannel = vscode.window.createOutputChannel('OnlineSales CMS');
+            this.outputChannel = vscode.window.createOutputChannel('LeadCMS CMS');
         }
         
         // Try to determine workspace path if not explicitly set
@@ -201,7 +201,7 @@ export class Logger {
             }
         }
         
-        return path.join(this.workspacePath, '.onlinesales', 'logs');
+        return path.join(this.workspacePath, '.leadcms', 'logs');
     }
 }
 

@@ -717,7 +717,7 @@ export class ContentReferenceUtils {
                 
                 if (entry.isDirectory()) {
                     // Skip system directories
-                    if (['.git', 'node_modules', '.onlinesales'].includes(entry.name)) {
+                    if (['.git', 'node_modules', '.leadcms'].includes(entry.name)) {
                         continue;
                     }
                     

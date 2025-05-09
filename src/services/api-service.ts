@@ -157,7 +157,7 @@ export class ApiService {
                 const token = await this.configService.getToken();
                 if (!token || !token.accessToken) {
                     Logger.error('Authentication required: missing or invalid token');
-                    throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+                    throw new AuthenticationError('Authentication required. Please authenticate with LeadCMS API.');
                 }
                 
                 // If we get here, there's some other initialization problem
@@ -168,7 +168,7 @@ export class ApiService {
             // it's likely an authentication issue
             if (!this.client) {
                 Logger.error('API client is undefined after successful initialization');
-                throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+                throw new AuthenticationError('Authentication required. Please authenticate with LeadCMS API.');
             }
             
             return true;
@@ -385,7 +385,7 @@ export class ApiService {
                 if (config) {
                     // If we have a config file but no token, this is an auth issue
                     Logger.info('Workspace is initialized but not authenticated, prompting for authentication');
-                    throw new AuthenticationError('Authentication required. Please authenticate with OnlineSales API.');
+                    throw new AuthenticationError('Authentication required. Please authenticate with LeadCMS API.');
                 }
                 
                 // Otherwise it's a real workspace initialization issue
