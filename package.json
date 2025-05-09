@@ -10,7 +10,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "workspaceContains:.leadcms"
   ],
   "main": "./dist/extension.js",
   "contributes": {
